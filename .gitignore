@@ -9,3 +9,5 @@ logs/
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.sqlite3
+tmp_*.sqlite3
