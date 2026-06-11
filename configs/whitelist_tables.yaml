@@ -1,0 +1,57 @@
+version: 1
+notes:
+  - Demo schema for the open-source text2sql-mvp reference implementation.
+  - Replace this file with your own whitelist generated via scripts/introspect_schema.py.
+  - Only SELECT on listed tables/columns/joins is allowed at runtime.
+tables:
+  - name: payment_order
+    object: PaymentOrder
+    display_name: Payment Order
+    domain_column: tenant_id
+    row_count_estimate: 500000
+    columns:
+      - {name: id, display_name: Order ID}
+      - {name: tenant_id, display_name: Tenant ID}
+      - {name: merchant_id, display_name: Merchant ID}
+      - {name: channel, display_name: Payment Channel}
+      - {name: amount, display_name: Amount}
+      - {name: status, display_name: Status}
+      - {name: created_at, display_name: Created At}
+      - {name: payer_mobile, display_name: Payer Mobile, sensitive: true, searchable: false}
+    indexes:
+      - {name: ix_payment_order_tenant_created, columns: [tenant_id, created_at]}
+      - {name: ix_payment_order_tenant_channel, columns: [tenant_id, channel]}
+    joins:
+      - {to_table: merchant, on: payment_order.merchant_id = merchant.id}
+
+  - name: refund_order
+    object: RefundOrder
+    display_name: Refund Order
+    domain_column: tenant_id
+    row_count_estimate: 80000
+    columns:
+      - {name: id, display_name: Refund ID}
+      - {name: tenant_id, display_name: Tenant ID}
+      - {name: payment_order_id, display_name: Payment Order ID}
+      - {name: amount, display_name: Refund Amount}
+      - {name: status, display_name: Status}
+      - {name: refund_time, display_name: Refund Time}
+    indexes:
+      - {name: ix_refund_order_tenant_time, columns: [tenant_id, refund_time]}
+    joins:
+      - {to_table: payment_order, on: refund_order.payment_order_id = payment_order.id}
+
+  - name: merchant
+    object: Merchant
+    display_name: Merchant
+    domain_column: tenant_id
+    row_count_estimate: 20000
+    columns:
+      - {name: id, display_name: Merchant ID}
+      - {name: tenant_id, display_name: Tenant ID}
+      - {name: name, display_name: Merchant Name}
+      - {name: category, display_name: Category}
+      - {name: status, display_name: Status}
+      - {name: contact_email, display_name: Contact Email}
+    indexes:
+      - {name: ix_merchant_tenant_name, columns: [tenant_id, name]}

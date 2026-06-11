@@ -1,0 +1,49 @@
+version: 1
+cases:
+  - id: payment-order-count
+    question: 支付订单总数是多少
+    domainId: demo-tenant-1
+    expected:
+      tables: [payment_order]
+      features: [count, domain_filter]
+  - id: payment-channel-stat
+    question: 支付订单按渠道统计
+    domainId: demo-tenant-1
+    expected:
+      tables: [payment_order]
+      features: [group_by, domain_filter]
+  - id: payment-status-stat
+    question: 支付订单按状态统计
+    domainId: demo-tenant-1
+    expected:
+      tables: [payment_order]
+      features: [group_by, domain_filter]
+  - id: merchant-count
+    question: 商户总数是多少
+    domainId: demo-tenant-1
+    expected:
+      tables: [merchant]
+      features: [count, domain_filter]
+  - id: refund-trend
+    question: 近7天每日退款笔数趋势
+    domainId: demo-tenant-1
+    expected:
+      tables: [refund_order]
+      features: [group_by, domain_filter]
+  - id: channel-amount-chart
+    question: 各支付渠道交易金额分布
+    domainId: demo-tenant-1
+    expected:
+      tables: [payment_order]
+      features: [group_by, domain_filter]
+  - id: merchant-rank
+    question: 商户交易金额排名
+    domainId: demo-tenant-1
+    expected:
+      tables: [merchant, payment_order]
+      features: [join, domain_filter]
+  - id: reject-unconfigured
+    question: 请统计火星基地飞船泊位能耗
+    domainId: demo-tenant-1
+    expected:
+      rejected: true

@@ -1,0 +1,53 @@
+[project]
+name = "text2sql-mvp"
+version = "0.1.0"
+description = "Open-source Text-to-SQL MVP with guarded SQL generation and semantic intent routing."
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=0.40",
+  "fastapi>=0.115",
+  "httpx>=0.27",
+  "mcp>=1.0",
+  "mcp-mysql-server>=1.0.2",
+  "pydantic>=2.8",
+  "PyMySQL>=1.1",
+  "PyYAML>=6.0",
+  "uvicorn>=0.30",
+]
+
+[project.scripts]
+text2sql-mcp = "text2sql_mcp.server:main"
+
+[project.optional-dependencies]
+ast = ["sqlglot>=25"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["apps/api/src", "apps/mcp/src", "packages/text2sql_runtime/src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "apps/api/src",
+  "apps/mcp/src",
+  "packages/text2sql_runtime/src",
+]
+testpaths = ["tests"]
+markers = [
+  "live: tests that require a real MySQL read-only database",
+]

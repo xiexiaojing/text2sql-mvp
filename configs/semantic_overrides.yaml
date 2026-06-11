@@ -1,0 +1,28 @@
+version: 1
+concepts:
+  payment_channel:
+    display_name: Payment channel
+    keywords: ["支付渠道", "渠道", "微信", "支付宝", "银联", "channel"]
+    object: PaymentOrder
+    rule:
+      type: table_count
+      table: payment_order
+  refund:
+    display_name: Refund
+    keywords: ["退款", "refund"]
+    object: RefundOrder
+    rule:
+      type: table_count
+      table: refund_order
+  merchant:
+    display_name: Merchant
+    keywords: ["商户", "商家", "merchant"]
+    object: Merchant
+    rule:
+      type: table_count
+      table: merchant
+sensitive_search_keywords:
+  - 手机号
+  - 电话
+  - mobile
+  - payer_mobile

@@ -1,0 +1,538 @@
+from __future__ import annotations
+
+import json
+from typing import Any, Literal
+
+ChartType = Literal["pie", "bar", "line", "heatmap"]
+
+CHART_INTENTS = frozenset(
+    {
+        "payment_channel_amount_distribution",
+        "refund_daily_trend",
+        "merchant_payment_rank",
+        "payment_channel_stat",
+        "payment_status_stat",
+    }
+)
+
+INTENT_DEFAULT_CHART: dict[str, ChartType] = {
+    "payment_channel_amount_distribution": "pie",
+    "refund_daily_trend": "line",
+    "merchant_payment_rank": "bar",
+    "payment_channel_stat": "pie",
+    "payment_status_stat": "bar",
+}
+
+CHART_TYPE_KEYWORDS: tuple[tuple[ChartType, tuple[str, ...]], ...] = (
+    ("heatmap", ("热力图", "热图", "heatmap")),
+    ("line", ("折线图", "趋势图", "走势图", "曲线图", "时序图", "折线", "趋势", "走势")),
+    ("bar", ("柱状图", "柱形图", "条形图", "直方图", "柱图", "条形")),
+    ("pie", ("饼图", "圆饼图", "占比图", "环形图", "扇形图", "饼状图")),
+)
+
+CHART_TYPE_LABELS: dict[ChartType, str] = {
+    "pie": "饼图",
+    "bar": "柱状图",
+    "line": "趋势图",
+    "heatmap": "热力图",
+}
+
+_LINE_SPECS = (
+    {"label_key": "refund_date", "value_key": "total", "x_name": "日期", "y_name": "退款笔数"},
+)
+_PIE_SPECS = (
+    {"label_key": "channel_value", "value_key": "total", "title": "支付渠道分布"},
+    {"label_key": "status_value", "value_key": "total", "title": "支付订单状态分布"},
+)
+
+
+def detect_requested_chart_type(question: str | None) -> ChartType | None:
+    text = str(question or "").strip().lower()
+    if not text:
+        return None
+    for chart_type, keywords in CHART_TYPE_KEYWORDS:
+        if any(keyword in text for keyword in keywords):
+            return chart_type
+    return None
+
+
+def resolve_chart_type(question: str | None, intent: str | None) -> ChartType | None:
+    requested = detect_requested_chart_type(question)
+    if requested is not None:
+        return requested
+    if intent:
+        return INTENT_DEFAULT_CHART.get(intent)
+    return None
+
+
+def maybe_build_chart(
+    intent: str | None,
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    question: str | None = None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    if not intent or intent not in CHART_INTENTS or not rows:
+        return None, None
+
+    chart_type = resolve_chart_type(question, intent)
+    if chart_type is None:
+        return None, None
+
+    if intent == "refund_daily_trend":
+        return _build_refund_trend_response(rows, chart_type, question)
+    if intent == "merchant_payment_rank":
+        return _build_merchant_rank_response(rows, chart_type, question)
+    return _build_distribution_response(rows, intent, chart_type, question)
+
+
+def maybe_build_generic_distribution_chart(
+    question: str | None,
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    intent: str | None = None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    chart_type = detect_requested_chart_type(question)
+    if chart_type is None or not rows:
+        return None, None
+    spec = _infer_distribution_spec(rows, slots, intent, question)
+    if spec is None:
+        return None, None
+    label_key, value_key, title = spec
+    categories, values = _extract_series(rows, label_key, value_key, empty_label="未填写")
+    if not categories:
+        return None, None
+    effective_type = chart_type
+    if chart_type in {"pie", "bar"}:
+        pass
+    elif chart_type == "line":
+        effective_type = "bar"
+    else:
+        effective_type = "pie"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=title,
+        x_name="类别",
+        y_name="人数",
+        rotate_labels=effective_type == "bar",
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    total = sum(values)
+    answer = f"{prefix}{title}合计 {total} 人，统计如下。"
+    return answer, option
+
+
+def append_echarts_fence(answer: str, option: dict[str, Any]) -> str:
+    payload = json.dumps(option, ensure_ascii=False, indent=2)
+    return f"{answer.rstrip()}\n\n```echarts\n{payload}\n```"
+
+
+def chart_series_type(option: dict[str, Any] | None) -> str | None:
+    if not option:
+        return None
+    series = option.get("series")
+    if not isinstance(series, list) or not series:
+        return None
+    first = series[0]
+    if not isinstance(first, dict):
+        return None
+    return str(first.get("type") or "")
+
+
+def _build_refund_trend_response(
+    rows: list[dict[str, Any]],
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    spec = _LINE_SPECS[0]
+    categories, values = _extract_series(rows, spec["label_key"], spec["value_key"])
+    if not categories:
+        return None, None
+    total = sum(values)
+    effective_type = chart_type if chart_type in {"line", "bar"} else "line"
+    title = "近7天退款笔数趋势"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=title,
+        x_name=spec["x_name"],
+        y_name=spec["y_name"],
+        smooth_line=True,
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    answer = f"{prefix}近7天共退款 {total} 笔，按日走势如下。"
+    return answer, option
+
+
+def _build_merchant_rank_response(
+    rows: list[dict[str, Any]],
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    categories, values = _extract_series(rows, "merchant_name", "total", empty_label="未知商户")
+    if not categories:
+        return None, None
+    effective_type = chart_type if chart_type in {"bar", "line"} else "bar"
+    title = "商户交易金额排名"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=title,
+        x_name="商户",
+        y_name="交易金额",
+        rotate_labels=True,
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    answer = f"{prefix}{title}如下。"
+    return answer, option
+
+
+def _build_visiting_trend_response(
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    spec = _LINE_SPECS[0]
+    categories, values = _extract_series(rows, spec["label_key"], spec["value_key"])
+    if not categories:
+        return None, None
+    person = str(slots.get("person_name") or "该走访人")
+    total = sum(values)
+    effective_type = chart_type if chart_type in {"line", "bar"} else "line"
+    title = f"{person}去年走访数走势"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=title,
+        x_name=spec["x_name"],
+        y_name=spec["y_name"],
+        smooth_line=True,
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    answer = f"{prefix}{person}去年共走访 {total} 次，按月走势如下。"
+    return answer, option
+
+
+def _build_grid_party_response(
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    buildings: list[str] = []
+    values: list[int] = []
+    for row in rows:
+        label = row.get("building_name") or row.get("building_name_path")
+        if label is None:
+            continue
+        buildings.append(str(label))
+        values.append(int(row.get("total") or 0))
+    if not buildings:
+        return None, None
+
+    grid_label = str(rows[0].get("grid_name") or slots.get("grid_name") or "该网格")
+    total = sum(values)
+    effective_type = chart_type
+    if chart_type not in {"heatmap", "bar"}:
+        effective_type = "heatmap"
+
+    if effective_type == "heatmap":
+        option = _build_heatmap_option(buildings, values, f"{grid_label}党员楼栋分布")
+    else:
+        option = _render_category_chart(
+            chart_type="bar",
+            categories=buildings,
+            values=values,
+            title=f"{grid_label}党员楼栋分布",
+            x_name="楼栋",
+            y_name="党员数",
+            rotate_labels=True,
+        )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    answer = f"{prefix}{grid_label}共有 {total} 名党员，按楼栋分布如下。"
+    return answer, option
+
+
+def _build_grid_distribution_response(
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    intent: str,
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    categories, values = _extract_series(rows, "grid_name", "total")
+    if not categories:
+        return None, None
+    total = sum(values)
+    tag_label = str(slots.get("tag_name") or "目标人群")
+    title = "各网格人口分布" if intent == "grid_population_rank" else f"各网格{tag_label}分布"
+    effective_type = chart_type if chart_type in {"bar", "pie"} else "bar"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=title,
+        x_name="网格",
+        y_name="人数",
+        rotate_labels=effective_type == "bar",
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    if intent == "grid_population_rank":
+        answer = f"{prefix}各网格人口合计 {total} 人，分布如下。"
+    else:
+        answer = f"{prefix}各网格「{tag_label}」合计 {total} 人，分布如下。"
+    return answer, option
+
+
+def _build_distribution_response(
+    rows: list[dict[str, Any]],
+    intent: str,
+    chart_type: ChartType,
+    question: str | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    spec = _match_pie_spec(rows)
+    if spec is None:
+        return None, None
+    categories, values = _extract_series(rows, spec["label_key"], spec["value_key"], empty_label="未填写")
+    if not categories:
+        return None, None
+    effective_type = chart_type if chart_type in {"pie", "bar"} else "pie"
+    option = _render_category_chart(
+        chart_type=effective_type,
+        categories=categories,
+        values=values,
+        title=spec["title"],
+        x_name="类别",
+        y_name="人数",
+        rotate_labels=effective_type == "bar",
+    )
+    if option is None:
+        return None, None
+    prefix = _chart_answer_prefix(question, effective_type)
+    if intent in {"payment_channel_amount_distribution", "payment_channel_stat"}:
+        answer = f"{prefix}支付渠道分布如下。"
+    elif intent == "payment_status_stat":
+        answer = f"{prefix}支付订单状态分布如下。"
+    else:
+        answer = f"{prefix}{spec['title']}如下。"
+    return answer, option
+
+
+def _chart_answer_prefix(question: str | None, chart_type: ChartType) -> str:
+    requested = detect_requested_chart_type(question)
+    if requested is None:
+        return ""
+    label = CHART_TYPE_LABELS.get(chart_type, "图表")
+    if requested == chart_type:
+        return f"已按您要求的{label}展示："
+    return f"当前数据更适合{label}展示："
+
+
+def _extract_series(
+    rows: list[dict[str, Any]],
+    label_key: str,
+    value_key: str,
+    *,
+    empty_label: str | None = None,
+) -> tuple[list[str], list[int]]:
+    categories: list[str] = []
+    values: list[int] = []
+    for row in rows:
+        label = row.get(label_key)
+        if label is None or str(label).strip() == "":
+            if empty_label is None:
+                continue
+            label = empty_label
+        categories.append(str(label))
+        values.append(int(row.get(value_key) or 0))
+    return categories, values
+
+
+def _render_category_chart(
+    *,
+    chart_type: ChartType,
+    categories: list[str],
+    values: list[int],
+    title: str,
+    x_name: str,
+    y_name: str,
+    smooth_line: bool = False,
+    rotate_labels: bool = False,
+) -> dict[str, Any] | None:
+    if not categories:
+        return None
+    if chart_type == "pie":
+        data = [{"name": name, "value": value} for name, value in zip(categories, values, strict=True)]
+        return {
+            "title": {"text": title, "left": "center"},
+            "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
+            "legend": {"orient": "horizontal", "bottom": 0},
+            "series": [
+                {
+                    "type": "pie",
+                    "radius": ["36%", "62%"],
+                    "center": ["50%", "46%"],
+                    "data": data,
+                    "label": {"formatter": "{b}\n{d}%"},
+                }
+            ],
+        }
+    if chart_type == "line":
+        return {
+            "title": {"text": title, "left": "center"},
+            "tooltip": {"trigger": "axis"},
+            "grid": {"left": "8%", "right": "4%", "bottom": "12%", "containLabel": True},
+            "xAxis": {"type": "category", "data": categories, "name": x_name},
+            "yAxis": {"type": "value", "name": y_name, "minInterval": 1},
+            "series": [
+                {
+                    "type": "line",
+                    "smooth": smooth_line,
+                    "data": values,
+                    "areaStyle": {"opacity": 0.08},
+                }
+            ],
+        }
+    axis_label: dict[str, Any] = {"interval": 0}
+    if rotate_labels:
+        axis_label["rotate"] = 30
+    return {
+        "title": {"text": title, "left": "center"},
+        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+        "grid": {"left": "8%", "right": "4%", "bottom": "16%", "containLabel": True},
+        "xAxis": {"type": "category", "data": categories, "name": x_name, "axisLabel": axis_label},
+        "yAxis": {"type": "value", "name": y_name, "minInterval": 1},
+        "series": [
+            {
+                "type": "bar",
+                "data": values,
+                "label": {"show": True, "position": "top"},
+            }
+        ],
+    }
+
+
+def _build_heatmap_option(
+    buildings: list[str],
+    values: list[int],
+    title: str,
+) -> dict[str, Any] | None:
+    if not buildings:
+        return None
+    max_value = max(values) if values else 0
+    heatmap_data = [[index, 0, value] for index, value in enumerate(values)]
+    return {
+        "title": {"text": title, "left": "center"},
+        "tooltip": {"position": "top"},
+        "grid": {"height": "56%", "top": "14%", "left": "8%", "right": "8%", "containLabel": True},
+        "xAxis": {
+            "type": "category",
+            "data": buildings,
+            "splitArea": {"show": True},
+            "axisLabel": {"interval": 0, "rotate": 30},
+        },
+        "yAxis": {"type": "category", "data": ["党员数"], "splitArea": {"show": True}},
+        "visualMap": {
+            "min": 0,
+            "max": max_value or 1,
+            "calculable": True,
+            "orient": "horizontal",
+            "left": "center",
+            "bottom": "2%",
+        },
+        "series": [
+            {
+                "name": "党员数",
+                "type": "heatmap",
+                "data": heatmap_data,
+                "label": {"show": True},
+                "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0, 0, 0, 0.5)"}},
+            }
+        ],
+    }
+
+
+def _match_pie_spec(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    if not rows:
+        return None
+    keys = set(rows[0].keys())
+    for spec in _PIE_SPECS:
+        if spec["label_key"] in keys and spec["value_key"] in keys:
+            return spec
+    return None
+
+
+_VALUE_KEYS = frozenset({"total", "count"})
+_LABEL_KEY_PRIORITY = (
+    "age_group",
+    "sexual",
+    "sexual_value",
+    "political_status_value",
+    "party_branch_label",
+    "marital_status",
+    "grid_name",
+    "building_name",
+)
+
+
+def _infer_distribution_spec(
+    rows: list[dict[str, Any]],
+    slots: dict[str, Any],
+    intent: str | None,
+    question: str | None,
+) -> tuple[str, str, str] | None:
+    if not rows:
+        return None
+    keys = list(rows[0].keys())
+    value_key = next((key for key in keys if key in _VALUE_KEYS), None)
+    if value_key is None:
+        return None
+    label_key = next((key for key in _LABEL_KEY_PRIORITY if key in keys), None)
+    if label_key is None:
+        candidates = [key for key in keys if key != value_key]
+        if len(candidates) != 1:
+            return None
+        label_key = candidates[0]
+    title = _distribution_title(label_key, slots, intent, question)
+    return label_key, value_key, title
+
+
+def _distribution_title(
+    label_key: str,
+    slots: dict[str, Any],
+    intent: str | None,
+    question: str | None,
+) -> str:
+    entity = str(slots.get("entity") or "")
+    text = str(question or "")
+    is_party = entity == "party_member" or "党员" in text or intent == "party_member_attribute_query"
+    if label_key == "age_group":
+        return "党员年龄分布" if is_party else "居民年龄分布"
+    if label_key in {"sexual", "sexual_value"}:
+        return "党员性别分布" if is_party else "居民性别分布"
+    if label_key == "political_status_value":
+        return "居民政治面貌分布"
+    if label_key == "party_branch_label":
+        return "各党组织党员分布"
+    if label_key == "marital_status":
+        return "党员婚姻状态分布" if is_party else "居民婚姻状态分布"
+    if label_key == "grid_name":
+        return "各网格人口分布"
+    return "分布统计"

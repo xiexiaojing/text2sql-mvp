@@ -1,0 +1,41 @@
+version: 1
+timeouts:
+  preflight_budget_ms: 5000
+  progress_after_ms: 10000
+  complex_notice_after_ms: 20000
+  hard_kill_after_ms: 30000
+limits:
+  default_detail_limit: 200
+  max_detail_limit: 1000
+  max_tables_per_query: 6
+  max_join_count: 5
+  reject_scan_rows: 500000
+  warn_scan_rows: 100000
+  rows_per_second_estimate: 50000
+  max_result_rows: 1000
+allowed_functions:
+  - count
+  - sum
+  - avg
+  - min
+  - max
+  - date
+  - date_format
+  - from_unixtime
+  - hour
+  - year
+  - month
+  - round
+  - nullif
+  - ifnull
+  - coalesce
+  - substring_index
+  - concat
+  - distinct
+  - date_sub
+  - current_date
+  - interval
+  - day
+cache:
+  enabled: false
+  ttl_seconds: 300
