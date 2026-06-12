@@ -1,6 +1,8 @@
+# Example only — copy values into .env.local (never commit .env.local).
+# The runtime reads LLM settings from environment variables, not this file directly.
 provider: openai_compatible
-base_url: https://api.openai.com/v1/chat/completions
-model: gpt-4.1-mini
+base_url: https://your-llm-provider.example/v1/chat/completions
+model: your-model-name
 api_key_env: TEXT2SQL_LLM_API_KEY
 timeout_seconds: 8
 temperature: 0

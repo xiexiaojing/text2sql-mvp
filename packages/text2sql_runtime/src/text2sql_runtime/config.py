@@ -134,7 +134,7 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
         timeout_seconds=int(os.getenv("TEXT2SQL_MYSQL_MCP_TIMEOUT", "35")),
     )
     intent_vector = IntentVectorSettings(
-        enabled=_env_bool("TEXT2SQL_INTENT_VECTOR_ENABLED", True),
+        enabled=_env_bool("TEXT2SQL_INTENT_VECTOR_ENABLED", False),
         provider=os.getenv("TEXT2SQL_INTENT_VECTOR_PROVIDER", "local").strip().lower(),
         distance_threshold=float(os.getenv("TEXT2SQL_INTENT_VECTOR_DISTANCE_THRESHOLD", "0.62")),
         timeout_ms=int(os.getenv("TEXT2SQL_INTENT_VECTOR_TIMEOUT_MS", "350")),
@@ -147,9 +147,9 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
     )
     return RuntimeSettings(
         project_root=root,
-        execution_mode=os.getenv("TEXT2SQL_EXECUTION_MODE", "auto"),
+        execution_mode=os.getenv("TEXT2SQL_EXECUTION_MODE", "dry_run"),
         executor_backend=os.getenv("TEXT2SQL_EXECUTOR_BACKEND", "direct_mysql").strip().lower(),
-        allow_sensitive_fields=_env_bool("TEXT2SQL_ALLOW_SENSITIVE_FIELDS", True),
+        allow_sensitive_fields=_env_bool("TEXT2SQL_ALLOW_SENSITIVE_FIELDS", False),
         audit_db_path=audit_path,
         mysql=mysql,
         mysql_mcp=mysql_mcp,

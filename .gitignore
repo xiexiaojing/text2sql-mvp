@@ -1,6 +1,9 @@
 .env
 .env.*
 !.env.example
+configs/llm.yaml
+configs/*.local.yaml
+secrets/
 data/
 logs/
 .venv/
@@ -11,3 +14,4 @@ __pycache__/
 *.egg-info/
 *.sqlite3
 tmp_*.sqlite3
+app.pid

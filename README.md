@@ -64,11 +64,13 @@ text2sql-mvp/
 
 ## Configuration
 
-Copy environment template:
+Copy environment template (keep secrets in `.env.local`, never commit it):
 
 ```bash
 cp .env.example .env.local
 ```
+
+See [SECURITY.md](SECURITY.md) for what must stay local-only.
 
 Key files:
 
@@ -112,6 +114,10 @@ PYTHONPATH=apps/api/src:packages/text2sql_runtime/src python scripts/run_evals.p
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
+
+## Tutorial (中文)
+
+New to Text2SQL? Read [docs/text2sql-intro.md](docs/text2sql-intro.md) — a beginner-friendly walkthrough using the payment demo, with a **where to change what** guide aligned to this repo.
 
 ## License
 

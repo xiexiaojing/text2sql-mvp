@@ -228,8 +228,8 @@ def _default_meaning(resolved: ResolvedField) -> str:
 
 
 def _ontology_root(project_root: Path) -> Path | None:
-    candidate = project_root.parent / "community-ontology-runtime" / "ontology" / "v0"
-    return candidate if candidate.exists() else None
+    # Optional external ontology bundle; not required for the open-source demo.
+    return None
 
 
 def _camel_case(value: str) -> str:
