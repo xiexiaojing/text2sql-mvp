@@ -177,6 +177,127 @@ def _previous_user_question(history: list[dict[str, str]], exclude: str) -> str 
     return None
 
 
+def _all_chart_keywords() -> tuple[str, ...]:
+    keywords: list[str] = []
+    for _, chart_keywords in CHART_TYPE_KEYWORDS:
+        keywords.extend(chart_keywords)
+    return tuple(keywords)
+
+
+def _strip_chart_keywords(text: str) -> str:
+    stripped = text
+    for keyword in _all_chart_keywords():
+        stripped = stripped.replace(keyword, "")
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
+_TOPIC_PATTERN = re.compile(
+    r"([\u4e00-\u9fff\dA-Za-z]+(?:渠道|状态|金额|退款|商户)?(?:分布|统计|排名|占比|结构|构成|情况|趋势))"
+)
+
+
+def _extract_chart_topic(text: str) -> str | None:
+    normalized = _normalize_question(text)
+    if not normalized:
+        return None
+    chart_pattern = "|".join(
+        re.escape(keyword)
+        for keyword in sorted(_all_chart_keywords(), key=len, reverse=True)
+    )
+
+    use_show = re.search(
+        rf"用(?:{chart_pattern})展示(.+?(?:分布|统计|排名|占比|结构|构成|情况|趋势))",
+        normalized,
+    )
+    if use_show:
+        topic = use_show.group(1).strip(" 、，,")
+        if len(topic) >= 2:
+            return topic
+
+    before_chart = re.search(
+        rf"(?:生成(?:一份)?|用|展示|统计|查询|看看)(?:一份)?(.+?)(?:{chart_pattern})",
+        normalized,
+    )
+    if before_chart:
+        topic = before_chart.group(1).strip(" 、，,")
+        if len(topic) >= 2 and not any(keyword in topic for keyword in _all_chart_keywords()):
+            return topic
+
+    after_show = re.search(
+        r"(?:展示|统计|查询|看看)(.+?(?:分布|统计|排名|占比|结构|构成|情况|趋势))",
+        normalized,
+    )
+    if after_show:
+        topic = after_show.group(1).strip(" 、，,")
+        if len(topic) >= 2 and not any(keyword in topic for keyword in _all_chart_keywords()):
+            return topic
+
+    topic_match = _TOPIC_PATTERN.search(normalized)
+    if topic_match:
+        topic = topic_match.group(1).strip()
+        if (
+            len(topic) >= 2
+            and not any(keyword in topic for keyword in _all_chart_keywords())
+            and not re.match(r"^[用按以向为对]", topic)
+        ):
+            return topic
+    return None
+
+
+def _extract_chart_topic_from_assistant(content: str) -> str | None:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    labels = "|".join(
+        re.escape(label)
+        for label in sorted(set(CHART_TYPE_LABELS.values()), key=len, reverse=True)
+    )
+    display_match = re.search(
+        rf"(?:已按您要求的|当前数据更适合)(?:{labels})展示[：:]\s*(.+?)(?:合计|，|,|。|\n|$)",
+        text,
+    )
+    if display_match:
+        topic = display_match.group(1).strip()
+        if len(topic) >= 2:
+            return topic
+    heading_match = re.search(r"^#{1,3}\s*(.+?(?:分布|统计|排名|占比|趋势))", text, flags=re.MULTILINE)
+    if heading_match:
+        return heading_match.group(1).strip()
+    inline_topic = _TOPIC_PATTERN.search(text)
+    if inline_topic and re.search(r"合计|统计如下|分布|走势", text):
+        return inline_topic.group(1).strip()
+    return None
+
+
+def _is_bare_chart_type_follow_up(question: str) -> bool:
+    if detect_requested_chart_type(question) is None:
+        return False
+    if _extract_chart_topic(question):
+        return False
+    remainder = re.sub(r"[也再一下生成展示用按的换成改为了来]", "", _strip_chart_keywords(question))
+    return len(remainder) <= 4
+
+
+def _find_prior_chart_topic(history: list[dict[str, str]], exclude: str) -> str | None:
+    exclude_norm = _normalize_question(exclude)
+    for item in reversed(history):
+        if item["role"] != "user":
+            continue
+        content = _normalize_question(item["content"])
+        if not content or content == exclude_norm:
+            continue
+        topic = _extract_chart_topic(item["content"])
+        if topic:
+            return topic
+    for item in reversed(history):
+        if item["role"] != "assistant":
+            continue
+        topic = _extract_chart_topic_from_assistant(item["content"])
+        if topic:
+            return topic
+    return None
+
+
 def _find_prior_chart_question(history: list[dict[str, str]], exclude: str) -> str | None:
     exclude_norm = _normalize_question(exclude)
     last_qualified: str | None = None
@@ -187,62 +308,55 @@ def _find_prior_chart_question(history: list[dict[str, str]], exclude: str) -> s
         if not content or content == exclude_norm:
             continue
         if (
-            _contains_domain_subject(item["content"])
-            or detect_requested_chart_type(item["content"])
-            or any(marker in item["content"] for marker in ["分布", "统计", "排名", "占比"])
+            _extract_chart_topic(item["content"])
+            or (
+                detect_requested_chart_type(item["content"])
+                and (
+                    _contains_domain_subject(item["content"])
+                    or any(marker in item["content"] for marker in ["分布", "统计", "排名", "占比", "趋势"])
+                )
+            )
         ):
             last_qualified = item["content"]
-    if last_qualified:
+    if last_qualified and _extract_chart_topic(last_qualified):
         return last_qualified
-
-    for item in reversed(history):
-        if item["role"] != "assistant":
-            continue
-        inferred = _infer_chart_question_from_assistant(item["content"])
-        if inferred:
-            return inferred
 
     return _previous_user_question(history, exclude)
 
 
 def _infer_chart_question_from_assistant(content: str) -> str | None:
-    text = str(content or "").strip()
-    if not text:
+    topic = _extract_chart_topic_from_assistant(content)
+    if not topic:
         return None
-    match = re.search(r"已按您要求的(?:饼图|柱状图|折线图|趋势图)展示[：:]\s*(.+?)(?:合计|，|,|。)", text)
-    if match:
-        topic = match.group(1).strip()
-        if topic:
-            return f"生成一份{topic}饼图"
-    if "支付渠道金额分布" in text or "支付渠道金额" in text:
-        return "生成一份支付渠道金额分布饼图"
-    if "退款笔数" in text or "退款趋势" in text:
-        return "近7天每日退款笔数趋势"
-    return None
+    return f"生成一份{topic}饼图"
 
 
 def _rewrite_chart_type_follow_up(question: str, history: list[dict[str, str]]) -> str | None:
     requested = detect_requested_chart_type(question)
-    if requested is None or not _looks_like_follow_up(question):
+    if requested is None:
         return None
-
-    previous = _find_prior_chart_question(history, exclude=question)
-    if not previous:
+    if not _looks_like_follow_up(question) and not _is_bare_chart_type_follow_up(question):
         return None
 
     new_label = _preferred_chart_label(question, requested)
     if not new_label:
         return None
 
+    topic = _find_prior_chart_topic(history, exclude=question)
+    if topic:
+        return f"生成一份{topic}{new_label}"
+
+    previous = _find_prior_chart_question(history, exclude=question)
+    if not previous:
+        return None
+
     previous_chart = detect_requested_chart_type(previous)
     if previous_chart is not None:
-        for keyword in _chart_keywords(previous_chart):
+        for keyword in sorted(_chart_keywords(previous_chart), key=len, reverse=True):
             if keyword in previous:
                 return previous.replace(keyword, new_label, 1)
 
-    merged = previous
-    for keyword in _all_chart_keywords():
-        merged = merged.replace(keyword, "")
+    merged = _strip_chart_keywords(previous)
     merged = re.sub(r"\s+", " ", merged).strip(" ，,、")
     if new_label not in merged:
         merged = f"{merged}{new_label}"
@@ -256,21 +370,15 @@ def _chart_keywords(chart_type: str) -> tuple[str, ...]:
     return ()
 
 
-def _all_chart_keywords() -> tuple[str, ...]:
-    keywords: list[str] = []
-    for _, chart_keywords in CHART_TYPE_KEYWORDS:
-        keywords.extend(chart_keywords)
-    return tuple(keywords)
-
-
 def _preferred_chart_label(question: str, chart_type: str) -> str:
+    best = ""
     for current_type, keywords in CHART_TYPE_KEYWORDS:
         if current_type != chart_type:
             continue
         for keyword in keywords:
-            if keyword in question:
-                return keyword
-    return CHART_TYPE_LABELS.get(chart_type, "")
+            if keyword in question and len(keyword) > len(best):
+                best = keyword
+    return best or CHART_TYPE_LABELS.get(chart_type, "")
 
 
 def _rewrite_follow_up(question: str) -> str:

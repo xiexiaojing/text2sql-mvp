@@ -10,6 +10,9 @@ This repository is a **generic reference implementation**. The bundled demo uses
 - **Business semantics layer** — questions map to reviewed SQL templates before any LLM fallback
 - **SQL guard** — SELECT-only, AST checks, automatic tenant filter injection, row limits
 - **Conversation context** — follow-ups like「那按状态呢」or「折线图也生成一下」rewrite safely
+- **Chart engine** — pie/bar/line/radar/rose/funnel and more via `echartsOption` + markdown fences
+- **Fast semantic path** — example-matched questions skip LLM slot extraction (`TEXT2SQL_LLM_SLOT_POLICY`)
+- **Public table hygiene** — hide `id` / `*_id` columns from API responses
 - **Dry-run by default** — plan SQL and audit without a live database
 - **HTTP API + MCP server** — same runtime behind REST and MCP tools
 - **Built-in chat UI** — `/chat` for local demos

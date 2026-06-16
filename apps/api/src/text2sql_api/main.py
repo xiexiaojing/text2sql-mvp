@@ -400,7 +400,17 @@ def query(payload: dict[str, Any]) -> dict[str, Any]:
             force_llm=bool(payload.get("forceLlm", payload.get("force_llm", False))),
         )
     )
-    return _model_dump(result)
+    return _public_query_response(result)
+
+
+def _public_query_response(result: Any) -> dict[str, Any]:
+    payload = _model_dump(result)
+    table = payload.get("table")
+    if isinstance(table, dict):
+        from text2sql_runtime.display_columns import filter_public_table
+
+        payload["table"] = filter_public_table(table)
+    return payload
 
 
 @app.post("/v1/query/estimate")

@@ -5,10 +5,16 @@ import re
 from typing import Any
 
 from .column_labels import EntityColumnLabelIndex, resolve_column_display_labels
+from .display_columns import filter_public_table
 from .models import ExecutionResult
 from .schema import SchemaCatalog
 
 _COUNT_ALIAS_RE = re.compile(r"\bas\s+count\b", re.IGNORECASE)
+
+_INTENT_SCALAR_ANSWERS: dict[str, str] = {
+    "payment_order_count": "支付订单共 {value} 笔。",
+    "merchant_count": "商户共 {value} 家。",
+}
 
 
 class ResultFormatter:
@@ -25,6 +31,11 @@ class ResultFormatter:
         execution: ExecutionResult,
         sql: str,
         sql_tables: list[str] | None = None,
+        *,
+        question: str | None = None,
+        intent_id: str | None = None,
+        display_name: str | None = None,
+        output_type: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if execution.mode == "dry_run":
             return (
@@ -37,17 +48,45 @@ class ResultFormatter:
             sql_tables,
             self.entity_labels,
         )
-        table = {
-            "columns": execution.columns,
-            "column_labels": column_labels,
-            "rows": [_format_row_display_values(row) for row in execution.rows],
-            "row_count": len(execution.rows),
-            "mode": execution.mode,
-        }
-        answer = self._answer_from_rows(execution.rows, sql)
+        omit_table = _should_omit_scalar_table(execution.rows, output_type)
+        if omit_table:
+            table: dict[str, Any] = {
+                "columns": [],
+                "column_labels": [],
+                "rows": [],
+                "row_count": 0,
+                "mode": execution.mode,
+            }
+        else:
+            table = filter_public_table(
+                {
+                    "columns": execution.columns,
+                    "column_labels": column_labels,
+                    "rows": [_format_row_display_values(row) for row in execution.rows],
+                    "row_count": len(execution.rows),
+                    "mode": execution.mode,
+                }
+            )
+        answer = self._answer_from_rows(
+            execution.rows,
+            sql,
+            question=question,
+            intent_id=intent_id,
+            display_name=display_name,
+            output_type=output_type,
+        )
         return answer, table
 
-    def _answer_from_rows(self, rows: list[dict[str, Any]], sql: str) -> str:
+    def _answer_from_rows(
+        self,
+        rows: list[dict[str, Any]],
+        sql: str,
+        *,
+        question: str | None = None,
+        intent_id: str | None = None,
+        display_name: str | None = None,
+        output_type: str | None = None,
+    ) -> str:
         if not rows:
             if "manager_name" in sql.lower() and "grid_manager_relation" in sql.lower():
                 return "未找到该地址对应的房屋，或暂未关联网格负责人。"
@@ -90,7 +129,13 @@ class ResultFormatter:
         if "grid_name" in first and "total" in first and "building_name" not in first:
             return _answer_grid_count_distribution(rows)
         if len(rows) == 1 and "total" in first:
-            return f"查询结果为 {first['total']}。"
+            return _answer_scalar_count(
+                first["total"],
+                question=question,
+                intent_id=intent_id,
+                display_name=display_name,
+                output_type=output_type,
+            )
         if len(rows) == 1 and "latest_update_time" in first:
             formatted = _format_timestamp(first.get("latest_update_time"))
             if formatted == "暂无":
@@ -102,7 +147,13 @@ class ResultFormatter:
             return _answer_visiting_last_visitor(rows)
         if _COUNT_ALIAS_RE.search(sql) and len(rows) == 1:
             value = next(iter(first.values()))
-            return f"查询结果为 {value}。"
+            return _answer_scalar_count(
+                value,
+                question=question,
+                intent_id=intent_id,
+                display_name=display_name,
+                output_type=output_type,
+            )
         return f"查询完成，返回 {len(rows)} 行。"
 
 
@@ -400,3 +451,52 @@ def _format_timestamp(value: Any) -> str:
     if moment.year < 1970 or moment.year > 2100:
         return str(value)
     return moment.strftime("%Y/%m/%d %H:%M")
+
+
+def _format_scalar_value(value: Any) -> str:
+    if value is None:
+        return "0"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _is_scalar_count_row(row: dict[str, Any]) -> bool:
+    if len(row) != 1:
+        return False
+    value = next(iter(row.values()))
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text.isdigit() or (text.replace(".", "", 1).isdigit() and text.count(".") <= 1)
+
+
+def _should_omit_scalar_table(rows: list[dict[str, Any]], output_type: str | None) -> bool:
+    if output_type == "scalar_count" and len(rows) == 1:
+        return True
+    if len(rows) == 1 and _is_scalar_count_row(rows[0]):
+        return True
+    return False
+
+
+def _answer_scalar_count(
+    value: Any,
+    *,
+    question: str | None,
+    intent_id: str | None,
+    display_name: str | None,
+    output_type: str | None,
+) -> str:
+    formatted_value = _format_scalar_value(value)
+    if intent_id and intent_id in _INTENT_SCALAR_ANSWERS:
+        return _INTENT_SCALAR_ANSWERS[intent_id].format(value=formatted_value)
+    normalized_question = (question or "").strip()
+    if "支付订单" in normalized_question or "订单" in normalized_question:
+        return f"支付订单共 {formatted_value} 笔。"
+    if "商户" in normalized_question:
+        return f"商户共 {formatted_value} 家。"
+    if display_name:
+        return f"{display_name}为 {formatted_value}。"
+    if output_type == "scalar_count":
+        return f"共 {formatted_value}。"
+    return f"查询结果为 {formatted_value}。"

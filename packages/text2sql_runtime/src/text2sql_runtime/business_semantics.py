@@ -20,7 +20,7 @@ from .semantics import (
     week_end_epoch_ms,
     week_start_epoch_ms,
 )
-from .config import load_yaml
+from .config import IntentVectorSettings, LlmSettings, load_yaml
 
 CHINESE_NAME_RE = re.compile(r"[\u4e00-\u9fa5]{2,4}")
 PHONE_RE = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
@@ -28,6 +28,7 @@ CARD_RE = re.compile(r"(?<![A-Za-z0-9])([0-9Xx]{15,18})(?![A-Za-z0-9])")
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 OPTIONAL_BLOCK_RE = re.compile(r"\[\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*?)\]\]", re.DOTALL)
 _STRONG_LEXICAL_DISTANCE = 0.05
+_FAST_LLM_SKIP_VECTOR_DISTANCE = 0.35
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class BusinessSemanticIndex:
         slot_extractor: LlmSlotExtractor | None = None,
         vector_index: IntentVectorIndex | None = None,
         entity_query_compiler: EntityQueryCompiler | None = None,
+        llm_slot_policy: str | None = None,
     ) -> None:
         self.entities = entities
         self.intents = intents
@@ -127,6 +129,10 @@ class BusinessSemanticIndex:
         self.vector_index = vector_index or build_intent_vector_index(vector_settings)
         self.slot_extractor = slot_extractor or (LlmSlotExtractor(llm_settings) if llm_settings else None)
         self._llm_configured = bool(llm_settings and llm_settings.configured)
+        policy = llm_slot_policy or (llm_settings.slot_policy if llm_settings else "auto")
+        self._llm_slot_policy = str(policy).strip().lower()
+        if self._llm_slot_policy not in {"auto", "always", "never"}:
+            self._llm_slot_policy = "auto"
         self._refresh_vector_index()
 
     @classmethod
@@ -137,6 +143,7 @@ class BusinessSemanticIndex:
         llm_settings: LlmSettings | None = None,
         slot_extractor: LlmSlotExtractor | None = None,
         vector_index: IntentVectorIndex | None = None,
+        llm_slot_policy: str | None = None,
     ) -> "BusinessSemanticIndex":
         if not path.exists():
             return cls(
@@ -148,6 +155,7 @@ class BusinessSemanticIndex:
                 slot_extractor=slot_extractor,
                 vector_index=vector_index,
                 entity_query_compiler=EntityQueryCompiler({}),
+                llm_slot_policy=llm_slot_policy,
             )
         raw = load_yaml(path)
         intents = [
@@ -203,6 +211,7 @@ class BusinessSemanticIndex:
             slot_extractor=slot_extractor,
             vector_index=vector_index,
             entity_query_compiler=EntityQueryCompiler.from_config(raw.get("entity_query_schemas")),
+            llm_slot_policy=llm_slot_policy,
         )
 
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
@@ -239,7 +248,22 @@ class BusinessSemanticIndex:
             )
 
         candidate_intents = [self._candidate_projection(candidate) for candidate in candidates]
-        extraction = self._extract_slots_with_llm(question, candidate_intents, history)
+
+        if self._llm_slot_policy != "always":
+            fast_plan = self._try_fast_heuristic_plan(
+                question,
+                candidates,
+                candidate_intents,
+                started,
+            )
+            if fast_plan is not None:
+                return fast_plan
+
+        extraction: SlotExtractionResult | None
+        if self._llm_slot_policy == "never":
+            extraction = None
+        else:
+            extraction = self._extract_slots_with_llm(question, candidate_intents, history)
         if extraction and extraction.decision == "fallback":
             return SemanticPlan(
                 status="unsupported",
@@ -719,6 +743,93 @@ class BusinessSemanticIndex:
             if match:
                 slots["card_no"] = match.group(1)
         return slots
+
+    def _try_fast_heuristic_plan(
+        self,
+        question: str,
+        candidates: list[IntentVectorCandidate],
+        candidate_intents: list[dict[str, Any]],
+        started: float,
+    ) -> SemanticPlan | None:
+        if not candidates:
+            return None
+        selected_candidate = candidates[0]
+        intent = self._intents_by_id.get(selected_candidate.intent_id)
+        if intent is None:
+            return None
+        if not self._should_skip_llm_for_intent(question, intent, selected_candidate, candidates):
+            return None
+        slots = self._complete_slots(question, intent, {}, use_heuristic=True)
+        if not self._heuristic_plan_ready(intent, slots):
+            return None
+        confidence = _confidence_from_distance(selected_candidate.distance)
+        intent, selected_candidate, slots, confidence, slot_source = self._apply_strong_lexical_override(
+            question,
+            intent,
+            selected_candidate,
+            slots,
+            confidence,
+            "heuristic_fast_path",
+            {},
+        )
+        return self._build_plan(
+            intent,
+            slots,
+            confidence,
+            started,
+            candidate_intents=candidate_intents,
+            matched_query=selected_candidate.matched_query,
+            vector_distance=round(selected_candidate.distance, 4),
+            slot_source=slot_source,
+            slot_elapsed_ms=0,
+        )
+
+    def _should_skip_llm_for_intent(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        selected_candidate: IntentVectorCandidate,
+        candidates: list[IntentVectorCandidate],
+    ) -> bool:
+        normalized_question = re.sub(r"\s+", "", question.strip())
+        for example in intent.examples:
+            if not example:
+                continue
+            normalized_example = re.sub(r"\s+", "", example.strip())
+            if normalized_question == normalized_example or example in question:
+                return True
+        if selected_candidate.distance <= _FAST_LLM_SKIP_VECTOR_DISTANCE:
+            if len(candidates) == 1:
+                return True
+            second_distance = candidates[1].distance
+            if second_distance - selected_candidate.distance >= 0.08:
+                return True
+        lexical = self._lexical_candidate(question)
+        if (
+            lexical is not None
+            and lexical.intent_id == intent.intent_id
+            and lexical.distance <= _STRONG_LEXICAL_DISTANCE
+        ):
+            return True
+        return False
+
+    def _heuristic_plan_ready(self, intent: BusinessIntent, slots: dict[str, Any]) -> bool:
+        if intent.status == "metadata":
+            return intent.intent_id == "field_explanation" and (
+                not _empty(slots.get("field_name"))
+                or (not _empty(slots.get("table_name")) and not _empty(slots.get("column_name")))
+            )
+        if intent.status != "executable":
+            return False
+        missing_slots = [slot for slot in intent.required_slots if _empty(slots.get(slot))]
+        if missing_slots:
+            return False
+        if intent.template_id == "dynamic_entity_query":
+            entity_query = slots.get("entity_query")
+            if not isinstance(entity_query, dict):
+                return False
+            return not _empty(entity_query.get("entity"))
+        return bool(intent.template_id)
 
     def _lexical_candidate(self, question: str) -> IntentVectorCandidate | None:
         matched = self._best_intent(question)

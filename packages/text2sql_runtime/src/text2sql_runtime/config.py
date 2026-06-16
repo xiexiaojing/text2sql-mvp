@@ -35,6 +35,7 @@ class LlmSettings:
     max_tokens: int
     transport: str = "openai"
     policy: str = "auto"
+    slot_policy: str = "auto"
 
     @property
     def configured(self) -> bool:
@@ -125,6 +126,7 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
         max_tokens=int(os.getenv("TEXT2SQL_LLM_MAX_TOKENS", "900")),
         transport=os.getenv("TEXT2SQL_LLM_TRANSPORT", "openai").strip().lower(),
         policy=os.getenv("TEXT2SQL_LLM_POLICY", "auto").strip().lower(),
+        slot_policy=os.getenv("TEXT2SQL_LLM_SLOT_POLICY", "auto").strip().lower(),
     )
     mysql_mcp = MySqlMcpSettings(
         command=os.getenv("TEXT2SQL_MYSQL_MCP_COMMAND", "mcp-mysql-server"),

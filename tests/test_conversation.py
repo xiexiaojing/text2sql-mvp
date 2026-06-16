@@ -19,6 +19,24 @@ def test_contextualize_chart_type_follow_up_from_channel_amount_pie():
     assert log.get("rewriteReason") == "chart_type_follow_up"
 
 
+def test_contextualize_bare_radar_follow_up_from_assistant_topic():
+    rewritten, log = contextualize_question(
+        "雷达图",
+        [
+            {"role": "user", "content": "查询一下"},
+            {
+                "role": "assistant",
+                "content": "已按您要求的饼图展示：支付渠道分布合计 100，统计如下。",
+            },
+            {"role": "user", "content": "雷达图"},
+        ],
+    )
+
+    assert rewritten == "生成一份支付渠道分布雷达图"
+    assert log is not None
+    assert log.get("rewriteReason") == "chart_type_follow_up"
+
+
 def test_contextualize_short_follow_up_with_previous_subject():
     rewritten, log = contextualize_question(
         "那按状态呢",

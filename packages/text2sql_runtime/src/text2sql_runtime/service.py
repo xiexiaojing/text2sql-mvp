@@ -394,6 +394,10 @@ class Text2SqlService:
                 execution,
                 guard_result.sql,
                 guard_result.tables,
+                question=effective_question,
+                intent_id=semantic_plan.intent,
+                display_name=semantic_plan.display_name,
+                output_type=semantic_plan.output_type,
             )
             if semantic_plan.intent == "visiting_self_rank":
                 answer = _answer_visiting_self_rank(
@@ -430,11 +434,11 @@ class Text2SqlService:
                 semantic_plan.intent,
                 execution.rows,
                 semantic_plan.slots,
-                question=query_input.question,
+                question=effective_question,
             )
             if chart_option is None and execution.rows:
                 chart_answer, chart_option = maybe_build_generic_distribution_chart(
-                    query_input.question,
+                    effective_question,
                     execution.rows,
                     semantic_plan.slots,
                     semantic_plan.intent,
