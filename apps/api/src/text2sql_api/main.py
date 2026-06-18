@@ -54,6 +54,7 @@ def chat() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Text2SQL MVP 查询</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
   <style>
     :root {{
       color-scheme: light;
@@ -96,7 +97,7 @@ def chat() -> str:
     .primary:disabled {{ background: #94a3b8; cursor: wait; }}
     .examples {{ display: grid; gap: 8px; margin-top: 16px; }}
     .example {{ text-align: left; color: #1f3b63; background: #edf4ff; }}
-    .chatbox {{ min-height: 640px; display: flex; flex-direction: column; overflow: hidden; }}
+    .chatbox {{ height: calc(100vh - 115px); display: flex; flex-direction: column; overflow: hidden; }}
     .messages {{ flex: 1; padding: 18px; overflow: auto; display: grid; align-content: start; gap: 12px; }}
     .msg {{ max-width: 88%; padding: 12px 14px; border-radius: 8px; line-height: 1.55; font-size: 14px; white-space: pre-wrap; }}
     .user {{ justify-self: end; background: #1f6feb; color: #fff; }}
@@ -107,8 +108,9 @@ def chat() -> str:
     table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #fff; }}
     th, td {{ border: 1px solid #d8dee9; padding: 8px; text-align: left; vertical-align: top; }}
     th {{ background: #f7f9fc; font-weight: 650; }}
-    pre {{ margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111827; color: #e5e7eb; font-size: 12px; white-space: pre; }}
-    .logpanel {{ min-height: 640px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; }}
+    pre {{ margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111827; color: #e5e7eb; font-size: 12px; white-space: normal; }}
+    .echarts-container {{ margin-top: 12px; width: 100%; min-height: 320px; background: #fff; border-radius: 6px; }}
+    .logpanel {{ height: calc(100vh - 115px); display: flex; flex-direction: column; overflow: hidden; }}
     .loghead {{ display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
     .loghead h2 {{ margin: 0; font-size: 16px; }}
     .loghint {{ color: #667085; font-size: 12px; }}
@@ -195,6 +197,7 @@ def chat() -> str:
     const send = document.getElementById("send");
     const sideSend = document.getElementById("sideSend");
     const conversationHistory = [];
+    const chartInstances = new Map();
     domainId.value = domainId.value || defaultDomain;
 
     async function loadHealth() {{
@@ -240,12 +243,69 @@ def chat() -> str:
       return `<table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table>`;
     }}
 
+    function extractEchartsOption(answer) {{
+      const match = answer.match(/```echarts\s*([\s\S]*?)```/);
+      if (!match) return null;
+      try {{
+        return JSON.parse(match[1].trim());
+      }} catch (error) {{
+        console.error("Failed to parse echarts option:", error);
+        return null;
+      }}
+    }}
+
+    function stripEchartsBlock(answer) {{
+      return answer.replace(/```echarts\s*[\s\S]*?```/g, "").trim();
+    }}
+
+    function createChartContainer(chartId) {{
+      return `<div id="${{chartId}}" class="echarts-container"></div>`;
+    }}
+
+    function renderEchartsChart(containerId, option) {{
+      setTimeout(() => {{
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        
+        // Dispose existing chart if any
+        if (chartInstances.has(containerId)) {{
+          chartInstances.get(containerId).dispose();
+        }}
+        
+        const chart = echarts.init(container);
+        chart.setOption(option);
+        chartInstances.set(containerId, chart);
+        
+        // Handle resize
+        window.addEventListener("resize", () => {{
+          chart.resize();
+        }});
+      }}, 100);
+    }}
+
     function renderResult(data) {{
       const parts = [];
       parts.push(`<strong>${{escapeHtml(data.status)}}</strong>`);
-      if (data.answer) parts.push(`<div>${{escapeHtml(data.answer)}}</div>`);
+      
+      let answerText = data.answer || "";
+      const echartsOption = extractEchartsOption(answerText);
+      const cleanAnswer = stripEchartsBlock(answerText);
+      
+      if (cleanAnswer) {{
+        parts.push(`<div>${{escapeHtml(cleanAnswer)}}</div>`);
+      }}
+      
       if (data.rejectionReason) parts.push(`<div>${{escapeHtml(data.rejectionReason)}}</div>`);
       parts.push(renderTable(data.table));
+      
+      // Render chart if available
+      if (echartsOption) {{
+        const chartId = `chart-${{Date.now()}}-${{Math.random().toString(36).substr(2, 9)}}`;
+        parts.push(createChartContainer(chartId));
+        // Schedule chart rendering after DOM update
+        setTimeout(() => renderEchartsChart(chartId, echartsOption), 0);
+      }}
+      
       if (data.generatedSql) parts.push(`<pre>${{escapeHtml(data.generatedSql)}}</pre>`);
       parts.push(`<div class="meta">queryId: ${{escapeHtml(data.queryId)}} · hitPath: ${{escapeHtml(data.hitPath)}} · ${{escapeHtml(data.elapsedMs)}} ms</div>`);
       return parts.filter(Boolean).join("");

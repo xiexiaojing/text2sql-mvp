@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from .models import RejectedQuery, TableRef
 from .schema import SchemaCatalog
-from .sql_policy import AGGREGATE_RE, GROUP_BY_RE, LIMIT_RE, has_domain_filter
+from .sql_policy import AGGREGATE_RE, GROUP_BY_RE, LIMIT_RE, LIMIT_PARAM_RE, has_domain_filter
 from .sql_utils import extract_table_refs, normalize_sql, remove_string_literals
 
 FORBIDDEN_RE = re.compile(
@@ -210,7 +210,8 @@ class SqlGuard:
     def _validate_limit(self, sql: str) -> None:
         if AGGREGATE_RE.search(sql) and GROUP_BY_RE.search(sql) is None:
             return
-        if not LIMIT_RE.search(sql):
+        # Check for both numeric LIMIT and parameterized LIMIT
+        if not LIMIT_RE.search(sql) and not LIMIT_PARAM_RE.search(sql):
             raise RejectedQuery("明细或分组查询必须包含 LIMIT", "missing_limit")
 
 

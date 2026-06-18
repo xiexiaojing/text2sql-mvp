@@ -52,19 +52,31 @@ class SemanticIndex:
         return any(keyword.lower() in lowered for keyword in self.sensitive_keywords)
 
 
+_EPOCH = dt.datetime(1970, 1, 1)
+
+
+def _date_to_epoch_ms(date_val: dt.date) -> int:
+    """Convert a date to epoch milliseconds.
+
+    Uses manual arithmetic instead of .timestamp() to support pre-1970
+    dates on Windows where the C runtime rejects negative timestamps.
+    """
+    return int((dt.datetime.combine(date_val, dt.time.min) - _EPOCH).total_seconds() * 1000)
+
+
 def epoch_ms_for_age_at_least(age: int, today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     try:
         cutoff = current.replace(year=current.year - age)
     except ValueError:
         cutoff = current.replace(month=2, day=28, year=current.year - age)
-    return int(dt.datetime.combine(cutoff, dt.time.min).timestamp() * 1000)
+    return _date_to_epoch_ms(cutoff)
 
 
 def month_start_epoch_ms(today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     start = dt.date(current.year, current.month, 1)
-    return int(dt.datetime.combine(start, dt.time.min).timestamp() * 1000)
+    return _date_to_epoch_ms(start)
 
 
 def month_end_epoch_ms(today: dt.date | None = None) -> int:
@@ -73,17 +85,17 @@ def month_end_epoch_ms(today: dt.date | None = None) -> int:
         next_month = dt.date(current.year + 1, 1, 1)
     else:
         next_month = dt.date(current.year, current.month + 1, 1)
-    return int(dt.datetime.combine(next_month, dt.time.min).timestamp() * 1000)
+    return _date_to_epoch_ms(next_month)
 
 
 def week_start_epoch_ms(today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     start = current - dt.timedelta(days=current.weekday())
-    return int(dt.datetime.combine(start, dt.time.min).timestamp() * 1000)
+    return _date_to_epoch_ms(start)
 
 
 def week_end_epoch_ms(today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     start = current - dt.timedelta(days=current.weekday())
     end = start + dt.timedelta(days=7)
-    return int(dt.datetime.combine(end, dt.time.min).timestamp() * 1000)
+    return _date_to_epoch_ms(end)

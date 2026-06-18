@@ -11,14 +11,14 @@ from .rejection_reasons import UNCONFIGURED_SEMANTIC_REASON
 
 class SQLiteAuditStore:
     def __init__(self, path: Path) -> None:
-        self.path = path
+        self.path = path.resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
 
     def record(self, entry: dict[str, Any]) -> None:
         payload = dict(entry)
         payload.setdefault("created_at", int(time.time() * 1000))
-        with sqlite3.connect(self.path) as connection:
+        with sqlite3.connect(str(self.path)) as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO query_audit (
@@ -47,7 +47,7 @@ class SQLiteAuditStore:
             )
 
     def get(self, query_id: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.path) as connection:
+        with sqlite3.connect(str(self.path)) as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 "SELECT * FROM query_audit WHERE query_id = ?",
@@ -126,7 +126,7 @@ class SQLiteAuditStore:
             FROM query_audit qa
             WHERE {where_clause}
         """
-        with sqlite3.connect(self.path) as connection:
+        with sqlite3.connect(str(self.path)) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(query, query_params).fetchall()
             summary = connection.execute(count_query, params).fetchone()
@@ -151,7 +151,7 @@ class SQLiteAuditStore:
         }
 
     def _init(self) -> None:
-        with sqlite3.connect(self.path) as connection:
+        with sqlite3.connect(str(self.path)) as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS query_audit (

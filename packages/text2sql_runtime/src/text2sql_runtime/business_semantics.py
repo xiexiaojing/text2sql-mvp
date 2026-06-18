@@ -941,7 +941,13 @@ def _year_start_epoch_ms(today: dt.date | None = None) -> int:
 
 
 def _date_to_epoch_ms(value: dt.date) -> int:
-    return int(dt.datetime.combine(value, dt.time.min).timestamp() * 1000)
+    """Convert a date to epoch milliseconds.
+
+    Uses manual arithmetic instead of .timestamp() to support pre-1970
+    dates on Windows where the C runtime rejects negative timestamps.
+    """
+    _EPOCH = dt.datetime(1970, 1, 1)
+    return int((dt.datetime.combine(value, dt.time.min) - _EPOCH).total_seconds() * 1000)
 
 
 def _add_years(value: dt.date, years: int) -> dt.date:
