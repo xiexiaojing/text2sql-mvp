@@ -106,7 +106,7 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
     root = project_root or default_project_root()
     load_local_env(root / ".env.local")
     performance = load_yaml(root / "configs" / "performance.yaml")
-    audit_path = Path(os.getenv("TEXT2SQL_AUDIT_DB", str(root / "data" / "audit.sqlite3")))
+    audit_path = Path(os.getenv("TEXT2SQL_AUDIT_DB", str(root / "data" / "audit.sqlite3"))).resolve()
     mysql = MySqlSettings(
         host=os.getenv("TEXT2SQL_MYSQL_HOST"),
         port=int(os.getenv("TEXT2SQL_MYSQL_PORT", "3306")),

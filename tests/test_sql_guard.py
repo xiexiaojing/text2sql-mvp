@@ -42,6 +42,27 @@ def test_adds_limit_to_detail_query(project_root, guard):
     guard.validate(limited)
 
 
+def test_does_not_duplicate_parameterized_limit(project_root, guard):
+    """测试参数化 LIMIT 不会被重复添加"""
+    catalog = SchemaCatalog.from_whitelist(project_root / "configs" / "whitelist_tables.yaml")
+    
+    # SQL 模板中已有参数化的 LIMIT %(result_limit)s
+    sql_template = (
+        "SELECT m.name AS merchant_name, SUM(po.amount) AS total "
+        "FROM merchant m JOIN payment_order po ON po.merchant_id = m.id "
+        "GROUP BY m.id, m.name ORDER BY total DESC LIMIT %(result_limit)s"
+    )
+    
+    sql_with_domain, _ = inject_domain_filter(sql_template, catalog, "domain-1")
+    limited = ensure_limit(sql_with_domain, default_limit=200, max_limit=1000)
+    
+    # 应该只有一个 LIMIT，且是参数化的
+    assert limited.count("LIMIT") == 1
+    assert "LIMIT %(result_limit)s" in limited
+    assert "LIMIT 200" not in limited
+    guard.validate(limited)
+
+
 def test_injects_domain_filter_even_when_tenant_id_is_selected(project_root):
     catalog = SchemaCatalog.from_whitelist(project_root / "configs" / "whitelist_tables.yaml")
 
