@@ -1,41 +1,41 @@
-version: 1
-timeouts:
-  preflight_budget_ms: 5000
-  progress_after_ms: 10000
-  complex_notice_after_ms: 20000
-  hard_kill_after_ms: 30000
-limits:
-  default_detail_limit: 200
-  max_detail_limit: 1000
-  max_tables_per_query: 6
-  max_join_count: 5
-  reject_scan_rows: 500000
-  warn_scan_rows: 100000
-  rows_per_second_estimate: 50000
-  max_result_rows: 1000
-allowed_functions:
-  - count
-  - sum
-  - avg
-  - min
-  - max
-  - date
-  - date_format
-  - from_unixtime
-  - hour
-  - year
-  - month
-  - round
-  - nullif
-  - ifnull
-  - coalesce
-  - substring_index
-  - concat
-  - distinct
-  - date_sub
-  - current_date
-  - interval
-  - day
-cache:
-  enabled: false
-  ttl_seconds: 300
+version: 1                            # 配置文件版本号
+timeouts:                             # 超时配置（单位：毫秒）
+  preflight_budget_ms: 5000           # 预检阶段（EXPLAIN 等）预算时间，超时则中止预检
+  progress_after_ms: 10000            # 超过该时间后开始向用户反馈进度
+  complex_notice_after_ms: 20000      # 超过该时间后提示"查询较复杂"
+  hard_kill_after_ms: 30000           # 硬性终止时间，无论如何强制结束查询
+limits:                               # 各类阈值限制
+  default_detail_limit: 200           # 明细结果默认返回行数
+  max_detail_limit: 1000              # 明细结果最大返回行数上限
+  max_tables_per_query: 6             # 单条 SQL 最多涉及的表数量（超过则拒绝）
+  max_join_count: 5                   # 单条 SQL 最多 JOIN 次数
+  reject_scan_rows: 500000            # EXPLAIN 预估扫描行数超过此值则拒绝执行
+  warn_scan_rows: 100000              # EXPLAIN 预估扫描行数超过此值则告警
+  rows_per_second_estimate: 50000     # 估算执行速度（行/秒），用于预估查询耗时
+  max_result_rows: 1000               # 返回给调用方的最大结果行数
+allowed_functions:                    # SQL 中允许使用的函数白名单（SqlGuard 校验）
+  - count                             # 计数函数
+  - sum                               # 求和函数
+  - avg                               # 平均值函数
+  - min                               # 最小值函数
+  - max                               # 最大值函数
+  - date                              # 提取日期部分
+  - date_format                       # 日期格式化
+  - from_unixtime                     # Unix 时间戳转日期
+  - hour                              # 提取小时
+  - year                              # 提取年份
+  - month                             # 提取月份
+  - round                             # 四舍五入
+  - nullif                            # 两值相等则返回 NULL
+  - ifnull                            # NULL 值替换
+  - coalesce                          # 返回第一个非 NULL 值
+  - substring_index                   # 按分隔符截取子串
+  - concat                            # 字符串拼接
+  - distinct                          # 去重
+  - date_sub                          # 日期减法
+  - current_date                      # 当前日期
+  - interval                          # 时间间隔关键字
+  - day                               # 提取日
+cache:                                # 结果缓存配置
+  enabled: false                      # 是否启用结果缓存
+  ttl_seconds: 300                    # 缓存有效期（秒）

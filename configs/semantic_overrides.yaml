@@ -1,28 +1,28 @@
-version: 1
-concepts:
-  payment_channel:
-    display_name: Payment channel
-    keywords: ["支付渠道", "渠道", "微信", "支付宝", "银联", "channel"]
-    object: PaymentOrder
-    rule:
-      type: table_count
-      table: payment_order
-  refund:
-    display_name: Refund
-    keywords: ["退款", "refund"]
-    object: RefundOrder
-    rule:
-      type: table_count
-      table: refund_order
-  merchant:
-    display_name: Merchant
-    keywords: ["商户", "商家", "merchant"]
-    object: Merchant
-    rule:
-      type: table_count
-      table: merchant
-sensitive_search_keywords:
-  - 手机号
-  - 电话
-  - mobile
-  - payer_mobile
+version: 1                            # 配置文件版本号
+concepts:                             # 语义概念定义（轻量级关键词概念检测，供 Router 和 SchemaContextBuilder 使用）
+  payment_channel:                    # 支付渠道概念
+    display_name: Payment Channel     # 概念显示名称
+    keywords: ["支付渠道", "渠道", "微信", "支付宝", "银联", "channel"]  # 触发该概念的关键词列表（命中任一即匹配）
+    object: PaymentOrder              # 关联的实体对象名
+    rule:                             # 概念匹配规则
+      type: table_count               # 规则类型：table_count=基于表行数统计
+      table: payment_order            # 关联的物理表名
+  refund:                             # 退款概念
+    display_name: Refund              # 概念显示名称
+    keywords: ["退款", "refund"]      # 触发关键词列表
+    object: RefundOrder               # 关联的实体对象名
+    rule:                             # 概念匹配规则
+      type: table_count               # 规则类型
+      table: refund_order             # 关联的物理表名
+  merchant:                           # 商户概念
+    display_name: Merchant            # 概念显示名称
+    keywords: ["商户", "商家", "merchant"]  # 触发关键词列表
+    object: Merchant                  # 关联的实体对象名
+    rule:                             # 概念匹配规则
+      type: table_count               # 规则类型
+      table: merchant                 # 关联的物理表名
+sensitive_search_keywords:            # 敏感字段检索关键词（命中时需走敏感字段审批路径）
+  - 手机号                            # 中文敏感关键词
+  - 电话                              # 中文敏感关键词
+  - mobile                            # 英文敏感关键词
+  - payer_mobile                      # 付款手机号字段名
