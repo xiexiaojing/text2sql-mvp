@@ -1,213 +1,81 @@
 version: 1                            # 配置文件版本号
 notes:                                # 配置说明备注列表
-  - Generic payment-domain demo semantics for text2sql-mvp.  # 通用支付领域演示语义配置
-  - Replace entities, intents, and sql_templates with your own business mappings.  # 用自己的业务映射替换实体、意图和 SQL 模板
-  - Only intents with status=executable and a sql_templates entry will generate SQL.  # 仅 status=executable 且有 sql_templates 条目的意图才会生成 SQL
+  - 基于真实业务（docs/wiki）配置的意图与 SQL 模板，覆盖项目/采购/供应商/询价/用户/部门/会议/知讯等核心域。  # 真实业务语义配置
+  - 这些表无 tenant_id，SQL 模板中通过 WHERE del_flag = 0 过滤逻辑删除数据。  # 逻辑删除说明
+  - 仅 status=executable 且有 sql_templates 条目的意图才会生成 SQL；新增业务问题请在此添加意图与对应模板。  # 扩展指引
 
 entities:                             # 实体定义（将业务实体映射到物理表）
-  PaymentOrder:                       # 支付订单实体
-    tables: [payment_order]           # 关联的物理表列表
-  RefundOrder:                        # 退款订单实体
-    tables: [refund_order]            # 关联的物理表列表
-  Merchant:                           # 商户实体
-    tables: [merchant]                # 关联的物理表列表
+  User:                               # 用户实体
+    tables: [sys_user]                # 关联物理表
+  Dept:                               # 部门实体
+    tables: [sys_dept]                # 关联物理表 
 
 intents:                              # 业务意图列表（多阶段匹配引擎的核心配置）
-  - id: payment_order_count           # 意图唯一标识
-    display_name: Payment order count # 意图显示名称
-    status: executable                # 意图状态：executable=可执行（会生成并执行 SQL）
-    priority: 95                      # 匹配优先级（数值越大优先级越高，冲突时优先匹配）
-    match: {all: ["订单"], any: ["总数", "有多少", "数量", "多少", "几笔", "笔数"]}  # 关键词匹配规则：all=必须全部命中，any=任一命中
-    examples: ["支付订单总数是多少", "有多少笔支付订单"]  # 示例问句（用于精确匹配快速路径，跳过 LLM）
-    semantic:                         # 语义扩展配置（用于向量相似度匹配，需配置 embeddings）
-      queries: ["支付订单数量", "统计支付订单总数", "订单笔数"]  # 语义查询变体列表
-    ontology_refs: [PaymentOrder]     # 关联的实体引用（ontology 引用）
-    physical_tables: [payment_order]  # 实际涉及的物理表
-    output_type: scalar_count         # 输出类型：scalar_count=标量计数
-    template: payment_order_count     # 使用的 SQL 模板名（对应下方 sql_templates 中的条目）
 
-  - id: payment_channel_stat          # 意图唯一标识
-    display_name: Payment channel distribution  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 96                      # 匹配优先级
-    match: {all: ["订单"], any: ["按渠道", "渠道统计", "渠道分布", "渠道"]}  # 关键词匹配规则
-    examples: ["支付订单按渠道统计", "各支付渠道订单数量"]  # 示例问句
+  # ==================== 用户/部门域 ====================
+  - id: user_count                    # 意图唯一标识
+    display_name: 用户总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 88                      # 匹配优先级
+    match: {all: ["用户"], any: ["总数", "有多少", "数量", "多少", "几人"]}  # 关键词匹配规则
+    examples: ["用户总数是多少", "有多少个用户", "用户数量"]  # 示例问句
     semantic:                         # 语义扩展配置
-      queries: ["支付渠道分布", "按渠道统计订单", "各渠道订单数"]  # 语义查询变体
-    ontology_refs: [PaymentOrder]     # 关联实体
-    physical_tables: [payment_order]  # 实际物理表
-    output_type: grouped_count        # 输出类型：grouped_count=分组计数（适合饼图/柱状图）
-    template: payment_channel_stat    # SQL 模板名
+      queries: ["统计用户总数", "用户一共有多少"]  # 语义查询变体
+    ontology_refs: [User]             # 关联实体
+    physical_tables: [sys_user]       # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: user_count              # SQL 模板名
 
-  - id: payment_status_stat           # 意图唯一标识
-    display_name: Payment status distribution  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 92                      # 匹配优先级
-    match: {all: ["订单"], any: ["按状态", "状态统计", "状态分布"]}  # 关键词匹配规则
-    examples: ["支付订单按状态统计"]  # 示例问句
+  - id: user_by_dept                  # 意图唯一标识
+    display_name: 用户按部门统计      # 意图显示名称
+    status: executable                # 意图状态
+    priority: 86                      # 匹配优先级
+    match: {all: ["用户"], any: ["按部门", "部门统计", "部门分布", "各部门"]}  # 关键词匹配规则
+    examples: ["用户按部门统计", "各部门用户数量", "各部门有多少用户"]  # 示例问句
     semantic:                         # 语义扩展配置
-      queries: ["订单状态分布", "按状态统计支付订单"]  # 语义查询变体
-    ontology_refs: [PaymentOrder]     # 关联实体
-    physical_tables: [payment_order]  # 实际物理表
-    output_type: grouped_count        # 输出类型：grouped_count=分组计数
-    template: payment_status_stat     # SQL 模板名
+      queries: ["按部门统计用户", "用户部门分布"]  # 语义查询变体
+    ontology_refs: [User, Dept]       # 关联实体（跨表 JOIN）
+    physical_tables: [sys_user, sys_dept]  # 实际物理表（多表 JOIN）
+    output_type: grouped_count        # 输出类型
+    template: user_by_dept            # SQL 模板名
 
-  - id: payment_channel_amount_distribution  # 意图唯一标识
-    display_name: Payment channel amount distribution  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 94                      # 匹配优先级
-    match: {any: ["支付渠道", "渠道金额", "交易金额分布", "渠道交易金额"]}  # 关键词匹配规则（仅需任一命中）
-    examples: ["各支付渠道交易金额分布", "生成一份支付渠道金额分布饼图"]  # 示例问句
+  - id: dept_count                    # 意图唯一标识
+    display_name: 部门总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 85                      # 匹配优先级
+    match: {all: ["部门"], any: ["总数", "有多少", "数量", "多少", "几个"]}  # 关键词匹配规则
+    examples: ["部门总数是多少", "有多少个部门", "部门数量"]  # 示例问句
     semantic:                         # 语义扩展配置
-      queries: ["支付渠道金额占比", "各渠道交易金额分布图", "渠道金额饼图"]  # 语义查询变体
-    ontology_refs: [PaymentOrder]     # 关联实体
-    physical_tables: [payment_order]  # 实际物理表
-    output_type: grouped_metric       # 输出类型：grouped_metric=分组指标聚合（按维度求和等）
-    template: payment_channel_amount_distribution  # SQL 模板名
+      queries: ["统计部门总数", "部门一共有多少"]  # 语义查询变体
+    ontology_refs: [Dept]             # 关联实体
+    physical_tables: [sys_dept]       # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: dept_count              # SQL 模板名
 
-  - id: refund_daily_trend            # 意图唯一标识
-    display_name: Refund daily trend  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 93                      # 匹配优先级
-    match: {all: ["退款"], any: ["趋势", "走势", "折线图", "每日", "近7天", "近七天"]}  # 关键词匹配规则
-    examples: ["近7天每日退款笔数趋势", "退款笔数折线图"]  # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["退款每日趋势", "近一周退款走势", "退款笔数时序图"]  # 语义查询变体
-    ontology_refs: [RefundOrder]      # 关联实体
-    physical_tables: [refund_order]   # 实际物理表
-    output_type: grouped_count        # 输出类型：grouped_count=分组计数（适合折线图）
-    template: refund_daily_trend      # SQL 模板名
 
-  - id: merchant_count                # 意图唯一标识
-    display_name: Merchant count      # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 90                      # 匹配优先级
-    match: {any: ["商户总数", "商户有多少", "商家数量", "有多少商户"]}  # 关键词匹配规则（仅需任一命中）
-    examples: ["商户总数是多少"]      # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["商户数量", "统计商户总数"]  # 语义查询变体
-    ontology_refs: [Merchant]         # 关联实体
-    physical_tables: [merchant]       # 实际物理表
-    output_type: scalar_count         # 输出类型：scalar_count=标量计数
-    template: merchant_count          # SQL 模板名
-
-  - id: merchant_payment_rank         # 意图唯一标识
-    display_name: Merchant payment rank  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 91                      # 匹配优先级
-    match: {all: ["商户"], any: ["排名", "排行", "TOP", "top"]}  # 关键词匹配规则
-    examples: ["商户交易金额排名", "商户交易金额TOP10"]  # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["商户交易额排名", "按交易金额排序商户"]  # 语义查询变体
-    ontology_refs: [Merchant, PaymentOrder]  # 关联实体（跨表查询，需 JOIN）
-    optional_slots: [result_limit]    # 可选槽位（从问句提取，未提取时使用默认值）
-    physical_tables: [merchant, payment_order]  # 实际物理表（多表 JOIN）
-    output_type: grouped_metric       # 输出类型：grouped_metric=分组指标聚合
-    template: merchant_payment_rank   # SQL 模板名
-    slot_defaults: {result_limit: 10} # 槽位默认值（未从问句提取时使用）
-
-  - id: payment_phone_lookup          # 意图唯一标识
-    display_name: Payment phone lookup  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 97                      # 匹配优先级
-    match: {all: ["手机"], any: ["订单", "支付"]}  # 关键词匹配规则
-    examples: ["按手机号查询支付订单", "有手机号13800138000的订单吗"]  # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["手机号查订单", "按付款手机号查询"]  # 语义查询变体
-    ontology_refs: [PaymentOrder]     # 关联实体
-    required_slots: [phone]           # 必填槽位（必须从问句提取 phone 参数，否则匹配失败）
-    physical_tables: [payment_order]  # 实际物理表
-    output_type: scalar_count         # 输出类型：scalar_count=标量计数
-    template: payment_phone_lookup    # SQL 模板名
-
-  - id: payment_sensitive_fields      # 意图唯一标识
-    display_name: Payment sensitive fields  # 意图显示名称
-    status: executable                # 意图状态：executable=可执行
-    priority: 98                      # 匹配优先级
-    match: {any: ["付款手机号", "payer_mobile", "查询付款手机"]}  # 关键词匹配规则（仅需任一命中）
-    examples: ["查询支付订单付款手机号"]  # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["返回订单付款手机号字段", "查看 payer mobile"]  # 语义查询变体
-    ontology_refs: [PaymentOrder]     # 关联实体
-    physical_tables: [payment_order]  # 实际物理表
-    output_type: list                 # 输出类型：list=明细列表（返回多列多行）
-    template: payment_sensitive_fields  # SQL 模板名
-
-  - id: unconfigured_demo             # 意图唯一标识
-    display_name: Unconfigured metric (demo)  # 意图显示名称
-    status: needs_mapping             # 意图状态：needs_mapping=待配置（不会生成 SQL，会返回拒绝提示）
-    priority: 10                      # 匹配优先级（最低，作为兜底演示）
-    match: {any: ["火星基地", "飞船泊位"]}  # 关键词匹配规则（演示用无意义关键词）
-    examples: ["请统计火星基地飞船泊位能耗"]  # 示例问句
-    semantic:                         # 语义扩展配置
-      queries: ["火星基地能耗统计"]   # 语义查询变体
-    reason: Demo intent kept to show rejection when semantics are not mapped.  # 说明：保留此演示意图以展示未映射时的拒绝行为
-    needs: [physical_table, sql_template]  # 缺失的配置项（需要补充物理表和 SQL 模板才能执行）
-
-sql_templates:                        # SQL 模板定义（参数化 SQL，运行时自动注入租户过滤和 LIMIT）
-  payment_order_count:                # 模板名（与 intent 的 template 字段对应）
-    plan: Count payment orders for the current tenant.  # 模板用途说明
-    sql: >                            # SQL 语句（折叠标量，运行时 SqlPolicy 自动注入 WHERE tenant_id = %(domain_id)s）
-      SELECT COUNT(*) AS total FROM payment_order po
-
-  payment_channel_stat:               # 模板名
-    plan: Group payment orders by channel.  # 模板用途说明
-    sql: >                            # SQL 语句（按渠道分组计数，适合饼图/柱状图）
-      SELECT po.channel AS channel_value, COUNT(*) AS total
-      FROM payment_order po
-      GROUP BY po.channel
-      ORDER BY total DESC
-
-  payment_status_stat:                # 模板名
-    plan: Group payment orders by status.  # 模板用途说明
-    sql: >                            # SQL 语句（按状态分组计数）
-      SELECT po.status AS status_value, COUNT(*) AS total
-      FROM payment_order po
-      GROUP BY po.status
-      ORDER BY total DESC
-
-  payment_channel_amount_distribution:  # 模板名
-    plan: Sum payment amount by channel for chart visualization.  # 模板用途说明
-    sql: >                            # SQL 语句（按渠道汇总金额，适合饼图）
-      SELECT po.channel AS channel_value, SUM(po.amount) AS total
-      FROM payment_order po
-      GROUP BY po.channel
-      ORDER BY total DESC
-
-  refund_daily_trend:                 # 模板名
-    plan: Daily refund count for the last 7 days.  # 模板用途说明
-    sql: >                            # SQL 语句（近7天每日退款笔数，适合折线图）
-      SELECT DATE(ro.refund_time) AS refund_date, COUNT(*) AS total
-      FROM refund_order ro
-      WHERE ro.refund_time >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)
-      GROUP BY refund_date
-      ORDER BY refund_date
-
-  merchant_count:                     # 模板名
-    plan: Count merchants for the current tenant.  # 模板用途说明
-    sql: >                            # SQL 语句（统计商户总数）
-      SELECT COUNT(*) AS total FROM merchant m
-
-  merchant_payment_rank:              # 模板名
-    plan: Rank merchants by total payment amount.  # 模板用途说明
-    params: {result_limit: result_limit}  # 参数映射（槽位名: SQL 参数名，运行时绑定 LIMIT 值）
-    sql: >                            # SQL 语句（商户 JOIN 支付订单，按交易金额降序排名，LIMIT 参数化）
-      SELECT m.name AS merchant_name, SUM(po.amount) AS total
-      FROM merchant m
-      JOIN payment_order po ON po.merchant_id = m.id
-      GROUP BY m.id, m.name
-      ORDER BY total DESC
-      LIMIT %(result_limit)s
-
-  payment_phone_lookup:               # 模板名
-    plan: Match payer mobile on payment orders without embedding the phone in SQL text.  # 模板用途说明
-    params: {phone: phone}            # 参数映射（手机号参数化绑定，避免 SQL 注入）
-    sql: >                            # SQL 语句（按手机号匹配支付订单计数，phone 参数化）
+sql_templates:        
+  # ==================== 用户/部门域 ====================
+  user_count:                         # 模板名：用户总数
+    plan: 统计未删除的用户总数。      # 模板用途说明
+    sql: >                            # SQL 语句
       SELECT COUNT(*) AS total
-      FROM payment_order po
-      WHERE po.payer_mobile = %(phone)s
+      FROM sys_user u
+      WHERE u.del_flag = 0
 
-  payment_sensitive_fields:           # 模板名
-    plan: Return payer mobile column (requires allow_sensitive_fields at runtime).  # 模板用途说明（运行时需开启 allow_sensitive_fields）
-    sql: >                            # SQL 语句（返回敏感字段 payer_mobile，需运行时授权）
-      SELECT po.id, po.payer_mobile FROM payment_order po
+  user_by_dept:                       # 模板名：用户按部门统计
+    plan: 按部门分组统计用户数量（JOIN 部门表取部门名称）。  # 模板用途说明
+    sql: >                            # SQL 语句（JOIN sys_dept，按部门名称分组）
+      SELECT d.dept_name AS dept_name, COUNT(*) AS total
+      FROM sys_user u
+      JOIN sys_dept d ON u.dept_id = d.dept_id
+      WHERE u.del_flag = 0 AND d.del_flag = 0
+      GROUP BY d.dept_name
+      ORDER BY total DESC
+
+  dept_count:                         # 模板名：部门总数
+    plan: 统计未删除的部门总数。      # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM sys_dept d
+      WHERE d.del_flag = 0
+      

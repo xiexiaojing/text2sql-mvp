@@ -1,57 +1,49 @@
 version: 1                            # 配置文件版本号
 notes:                                # 配置说明备注列表
-  - Demo schema for the open-source text2sql-mvp reference implementation.  # 开源参考实现的演示 schema
-  - Replace this file with your own whitelist generated via scripts/introspect_schema.py.  # 用 introspect_schema.py 生成自己的白名单后替换此文件
-  - Only SELECT on listed tables/columns/joins is allowed at runtime.  # 运行时仅允许对列出的表/列/JOIN 执行 SELECT
-tables:                               # 白名单表列表（SqlGuard、SqlPolicy、SchemaContextBuilder、Router 均依赖此配置）
-  - name: payment_order               # 物理表名
-    object: PaymentOrder              # 对应的实体对象名（PascalCase）
-    display_name: Payment Order       # 表的显示名称（用于回答展示）
-    domain_column: tenant_id          # 租户隔离列（运行时 SqlPolicy 自动注入 WHERE tenant_id = %(domain_id)s）
-    row_count_estimate: 500000        # 预估行数（用于 EXPLAIN 成本评估和路由判断）
+  - 真实业务 schema（基于 docs/wiki 表说明生成），覆盖项目/采购/供应商/询价/用户/部门/会议/知讯等核心域。  # 真实业务白名单
+  - 这些表无 tenant_id 租户隔离列，采用 del_flag 逻辑删除；domain_column 留空，SqlPolicy 不注入租户过滤。  # 无租户隔离说明
+  - 仅对列出的表/列/JOIN 允许 SELECT；新增表请参考 docs/wiki 同名 md 文件补充。  # 扩展指引
+tables: 
+  - name: sys_user                    # 物理表名：用户信息表
+    object: User                      # 实体对象名
+    display_name: 用户                # 表显示名称
+    row_count_estimate: 5000          # 预估行数
     columns:                          # 允许访问的列列表
-      - {name: id, display_name: Order ID}                                              # 订单主键
-      - {name: tenant_id, display_name: Tenant ID}                                      # 租户 ID（隔离列）
-      - {name: merchant_id, display_name: Merchant ID}                                  # 商户 ID（外键）
-      - {name: channel, display_name: Payment Channel}                                  # 支付渠道（微信/支付宝/银联等）
-      - {name: amount, display_name: Amount}                                            # 交易金额
-      - {name: status, display_name: Status}                                            # 订单状态
-      - {name: created_at, display_name: Created At}                                    # 创建时间
-      - {name: payer_mobile, display_name: Payer Mobile, sensitive: true, searchable: false}  # 付款手机号（sensitive=敏感字段，searchable=不可搜索）
-    indexes:                          # 表索引列表（用于成本估算和路由优化）
-      - {name: ix_payment_order_tenant_created, columns: [tenant_id, created_at]}       # 租户+创建时间联合索引
-      - {name: ix_payment_order_tenant_channel, columns: [tenant_id, channel]}          # 租户+渠道联合索引
-    joins:                            # 允许的 JOIN 路径（白名单校验，未列出的 JOIN 会被拒绝）
-      - {to_table: merchant, on: payment_order.merchant_id = merchant.id}               # 关联商户表
-
-  - name: refund_order                # 物理表名
-    object: RefundOrder               # 对应的实体对象名
-    display_name: Refund Order        # 表的显示名称
-    domain_column: tenant_id          # 租户隔离列
-    row_count_estimate: 80000         # 预估行数
-    columns:                          # 允许访问的列列表
-      - {name: id, display_name: Refund ID}                                             # 退款主键
-      - {name: tenant_id, display_name: Tenant ID}                                      # 租户 ID（隔离列）
-      - {name: payment_order_id, display_name: Payment Order ID}                        # 原支付订单 ID（外键）
-      - {name: amount, display_name: Refund Amount}                                     # 退款金额
-      - {name: status, display_name: Status}                                            # 退款状态
-      - {name: refund_time, display_name: Refund Time}                                  # 退款时间
+      - {name: user_id, display_name: 用户ID}                         # 用户ID（工号，唯一）
+      - {name: suser_id, display_name: 直接上级}                      # 直接上级 user_id（自关联）
+      - {name: dept_id, display_name: 部门ID}                         # 部门ID（关联 sys_dept.dept_id）
+      - {name: user_name, display_name: 用户账号}                     # 用户账号（域账号，唯一）
+      - {name: nick_name, display_name: 用户姓名}                     # 用户姓名
+      - {name: email, display_name: 用户邮箱}                         # 用户邮箱
+      - {name: phonenumber, display_name: 手机号码, sensitive: true, searchable: false}  # 手机号码（敏感字段，需脱敏，不可搜索）
+      - {name: work_city, display_name: 工作地点}                     # 工作地点
+      - {name: sex, display_name: 用户性别}                           # 用户性别（0男 1女 2未知）
+      - {name: status, display_name: 帐号状态}                        # 帐号状态（0正常 1停用）
+      - {name: del_flag, display_name: 删除标志}                      # 删除标志（0存在 1删除）
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
     indexes:                          # 表索引列表
-      - {name: ix_refund_order_tenant_time, columns: [tenant_id, refund_time]}          # 租户+退款时间联合索引
+      - {name: sys_user_UN, columns: [user_id]}                       # user_id 唯一索引
+      - {name: sys_user_un_username, columns: [user_name]}            # user_name 唯一索引
     joins:                            # 允许的 JOIN 路径
-      - {to_table: payment_order, on: refund_order.payment_order_id = payment_order.id}  # 关联支付订单表
+      - {to_table: sys_dept, on: sys_user.dept_id = sys_dept.dept_id}  # 用户-部门
 
-  - name: merchant                    # 物理表名
-    object: Merchant                  # 对应的实体对象名
-    display_name: Merchant            # 表的显示名称
-    domain_column: tenant_id          # 租户隔离列
-    row_count_estimate: 20000         # 预估行数
+  - name: sys_dept                    # 物理表名：部门表
+    object: Dept                      # 实体对象名
+    display_name: 部门                # 表显示名称
+    row_count_estimate: 200           # 预估行数
     columns:                          # 允许访问的列列表
-      - {name: id, display_name: Merchant ID}                                           # 商户主键
-      - {name: tenant_id, display_name: Tenant ID}                                      # 租户 ID（隔离列）
-      - {name: name, display_name: Merchant Name}                                       # 商户名称
-      - {name: category, display_name: Category}                                        # 商户分类
-      - {name: status, display_name: Status}                                            # 商户状态
-      - {name: contact_email, display_name: Contact Email}                              # 联系邮箱
+      - {name: id, display_name: 自增ID}                              # 自增ID
+      - {name: dept_id, display_name: 部门ID}                         # 部门ID（唯一，被 sys_user.dept_id 关联）
+      - {name: parent_id, display_name: 父部门ID}                     # 父部门ID（0表示顶级部门）
+      - {name: ancestors, display_name: 祖级列表}                     # 祖级列表（逗号分隔）
+      - {name: dept_name, display_name: 部门名称}                     # 部门名称
+      - {name: dept_long_name, display_name: 部门全称}                # 部门全称
+      - {name: dept_lvl, display_name: 部门层级}                      # 部门层级
+      - {name: leader, display_name: 部门领导}                        # 部门领导
+      - {name: status, display_name: 部门状态}                        # 部门状态（0正常 1停用）
+      - {name: del_flag, display_name: 删除标志}                      # 删除标志（0存在 1删除）
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
     indexes:                          # 表索引列表
-      - {name: ix_merchant_tenant_name, columns: [tenant_id, name]}                     # 租户+商户名称联合索引
+      - {name: sys_dept_UN, columns: [dept_id]}                       # dept_id 唯一索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: sys_user, on: sys_dept.dept_id = sys_user.dept_id}  # 部门-用户

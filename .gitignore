@@ -15,3 +15,4 @@ __pycache__/
 *.sqlite3
 tmp_*.sqlite3
 app.pid
+/docs/wiki
