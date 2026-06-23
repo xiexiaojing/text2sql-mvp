@@ -10,7 +10,7 @@ from text2sql_runtime.field_encryption import (
 def test_encrypt_field_value_matches_java_default_key():
     settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="sm4")
     encrypted = encrypt_field_value("110101199001011234", settings)
-    assert encrypted == "sm4:qJorHg4HKAcsfwZ1vYwjm3XID/NDyDirWqsFDlU7lCamVyfID+AQvgXnL3SZkgDt"
+    assert encrypted == "sm4:H7I5oeeo+X9JIqXxmtVTCrJmKznB9iov7C5daoo0ZDXjQvn+/Z+mB93v0zLrYFcl"
 
 
 def test_is_stored_ciphertext():
@@ -34,17 +34,19 @@ def test_encrypt_sensitive_query_params_skips_other_intents():
     settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="sm4")
     params = encrypt_sensitive_query_params(
         {"card_no": "110101199001011234"},
-        intent_id="payment_order_count",
+        intent_id="resident_phone_lookup",
         settings=settings,
     )
     assert params["card_no"] == "110101199001011234"
 
 
-def test_encrypt_sensitive_query_params_encrypts_payment_phone():
-    settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="sm4")
-    params = encrypt_sensitive_query_params(
-        {"phone": "13800138000"},
-        intent_id="payment_phone_lookup",
-        settings=settings,
-    )
-    assert params["phone"].startswith("sm4:")
+def test_encrypt_field_value_supports_ss4_prefix():
+    settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="ss4")
+    encrypted = encrypt_field_value("110101199001011234", settings)
+    assert encrypted.startswith("ss4:")
+
+
+def test_encrypt_field_value_ss4_matches_java_mix_encrypt_without_pkcs7_pad():
+    settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="ss4")
+    encrypted = encrypt_field_value("370403199903080303", settings)
+    assert encrypted == "ss4:+pdwl0SI+LQpo4c0+fWa1LIT9JkKptXX8kwHtK+EgNM="

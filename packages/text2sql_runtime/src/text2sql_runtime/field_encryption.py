@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_ENCRYPTION_KEY = "小胖蟹"
+DEFAULT_ENCRYPTION_KEY = "阿弥陀佛"
 DEFAULT_IV = "fix:code:iv:code"
 
 CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON = (
@@ -68,6 +68,19 @@ def is_stored_ciphertext(value: str) -> bool:
     return any(lowered.startswith(prefix) for prefix in _STORED_CIPHERTEXT_PREFIXES)
 
 
+def _encrypt_cbc(plaintext: str, *, encryption_type: str, key: str) -> str:
+    sm4_encrypt, crypt_sm4_cls = _load_sm4()
+    key_bytes = _normalize_key(key, encryption_type)
+    iv_bytes = DEFAULT_IV.encode("utf-8")
+    payload = plaintext.encode("utf-8")
+    if encryption_type == "sm4":
+        payload = _pkcs7_pad(payload)
+    crypt_sm4 = crypt_sm4_cls()
+    crypt_sm4.set_key(key_bytes, sm4_encrypt)
+    encrypted = crypt_sm4.crypt_cbc(iv_bytes, payload)
+    return f"{encryption_type}:" + base64.b64encode(encrypted).decode("ascii")
+
+
 def encrypt_field_value(plaintext: str, settings: FieldEncryptionSettings) -> str:
     if not settings.active:
         return plaintext
@@ -76,21 +89,8 @@ def encrypt_field_value(plaintext: str, settings: FieldEncryptionSettings) -> st
     if is_stored_ciphertext(plaintext):
         return plaintext
     encryption_type = settings.encryption_type
-    sm4_encrypt, crypt_sm4_cls = _load_sm4()
-    if encryption_type == "sm4":
-        key_bytes = _normalize_key(settings.key, "sm4")
-        iv_bytes = DEFAULT_IV.encode("utf-8")
-        crypt_sm4 = crypt_sm4_cls()
-        crypt_sm4.set_key(key_bytes, sm4_encrypt)
-        encrypted = crypt_sm4.crypt_cbc(iv_bytes, _pkcs7_pad(plaintext.encode("utf-8")))
-        return "sm4:" + base64.b64encode(encrypted).decode("ascii")
-    if encryption_type == "ss4":
-        key_bytes = _normalize_key(settings.key, "ss4")
-        iv_bytes = DEFAULT_IV.encode("utf-8")
-        crypt_sm4 = crypt_sm4_cls()
-        crypt_sm4.set_key(key_bytes, sm4_encrypt)
-        encrypted = crypt_sm4.crypt_cbc(iv_bytes, _pkcs7_pad(plaintext.encode("utf-8")))
-        return "ss4:" + base64.b64encode(encrypted).decode("ascii")
+    if encryption_type in {"sm4", "ss4"}:
+        return _encrypt_cbc(plaintext, encryption_type=encryption_type, key=settings.key)
     raise ValueError(f"Unsupported encryption type: {encryption_type}")
 
 
