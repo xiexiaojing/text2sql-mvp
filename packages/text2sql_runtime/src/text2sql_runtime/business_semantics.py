@@ -12,7 +12,8 @@ from .models import GeneratedSql, RejectedQuery
 from .rejection_reasons import UNCONFIGURED_SEMANTIC_REASON
 from .semantic_slot_extractor import LlmSlotExtractor, SlotExtractionResult
 from .semantic_slots import computed_values, derive_slots, extract_slots
-from .config import IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
+from .config import FieldEncryptionSettings, IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
+from .field_encryption import CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON, encrypt_sensitive_query_params
 
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 OPTIONAL_BLOCK_RE = re.compile(r"\[\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*?)\]\]", re.DOTALL)
@@ -108,10 +109,12 @@ class BusinessSemanticIndex:
         entity_query_compiler: EntityQueryCompiler | None = None,
         llm_slot_policy: str | None = None,
         routing_settings: IntentRoutingSettings | None = None,
+        field_encryption: FieldEncryptionSettings | None = None,
     ) -> None:
         self.entities = entities
         self.intents = intents
         self.templates = templates
+        self.field_encryption = field_encryption or FieldEncryptionSettings()
         self.entity_query_compiler = entity_query_compiler or EntityQueryCompiler({})
         self._intents_by_id = {intent.intent_id: intent for intent in intents}
         self.routing = routing_settings or IntentRoutingSettings()
@@ -134,6 +137,7 @@ class BusinessSemanticIndex:
         vector_index: IntentVectorIndex | None = None,
         llm_slot_policy: str | None = None,
         routing_settings: IntentRoutingSettings | None = None,
+        field_encryption: FieldEncryptionSettings | None = None,
     ) -> "BusinessSemanticIndex":
         if not path.exists():
             return cls(
@@ -147,6 +151,7 @@ class BusinessSemanticIndex:
                 entity_query_compiler=EntityQueryCompiler({}),
                 llm_slot_policy=llm_slot_policy,
                 routing_settings=routing_settings,
+                field_encryption=field_encryption,
             )
         raw = load_yaml(path)
         performance_path = path.parent / "performance.yaml"
@@ -208,6 +213,7 @@ class BusinessSemanticIndex:
             entity_query_compiler=EntityQueryCompiler.from_config(raw.get("entity_query_schemas")),
             llm_slot_policy=llm_slot_policy,
             routing_settings=routing,
+            field_encryption=field_encryption,
         )
 
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
@@ -231,6 +237,7 @@ class BusinessSemanticIndex:
                     use_heuristic=True,
                 )
                 return self._build_plan(
+                    question,
                     intent,
                     slots,
                     confidence,
@@ -366,6 +373,7 @@ class BusinessSemanticIndex:
             )
 
         return self._build_plan(
+            question,
             intent,
             slots,
             confidence,
@@ -379,6 +387,7 @@ class BusinessSemanticIndex:
 
     def _build_plan(
         self,
+        question: str,
         intent: BusinessIntent,
         slots: dict[str, Any],
         confidence: float,
@@ -401,9 +410,24 @@ class BusinessSemanticIndex:
                 reason = "请说明要查询哪个字段，例如：table_name.column_name。"
         elif status == "metadata":
             pass
+        elif intent.intent_id == "resident_card_lookup" and status == "executable":
+            if all(_empty(slots.get(name)) for name in ("card_no", "card_prefix", "card_suffix")):
+                status = "needs_clarification"
+                reason = "缺少必要条件：card_no"
+            elif self.field_encryption.active and (
+                not _empty(slots.get("card_prefix")) or not _empty(slots.get("card_suffix"))
+            ):
+                status = "needs_clarification"
+                reason = CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON
         elif status == "executable" and missing_slots:
             status = "needs_clarification"
-            reason = f"缺少必要条件：{', '.join(missing_slots)}"
+            from .disambiguation import missing_slot_clarification_reason
+
+            clarify_reason = missing_slot_clarification_reason(question, intent.intent_id, missing_slots)
+            if clarify_reason:
+                reason = clarify_reason
+            else:
+                reason = f"缺少必要条件：{', '.join(missing_slots)}"
         elif status == "executable" and not intent.template_id:
             status = "needs_mapping"
             reason = "该意图缺少可执行 SQL 模板。"
@@ -570,6 +594,11 @@ class BusinessSemanticIndex:
             for param_name, slot_name in template.params.items()
             if not _empty(plan.slots.get(slot_name))
         }
+        params = encrypt_sensitive_query_params(
+            params,
+            intent_id=plan.intent or "",
+            settings=self.field_encryption,
+        )
         log = {
             "kind": "semantic_template",
             "status": "ok",
@@ -741,6 +770,7 @@ class BusinessSemanticIndex:
             {},
         )
         return self._build_plan(
+            question,
             intent,
             slots,
             confidence,

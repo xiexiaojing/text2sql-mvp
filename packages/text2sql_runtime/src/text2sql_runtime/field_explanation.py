@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import load_yaml
 from .schema import SchemaCatalog, TableSchema
+from .semantic_enrichment import SemanticEnrichmentIndex
 from .models import ColumnSchema
 
 TECHNICAL_FIELD_RE = re.compile(
@@ -33,6 +34,7 @@ class ResolvedField:
     source_class: str | None
     ontology_display_name: str | None
     ontology_notes: str | None
+    enrichment_notes: tuple[str, ...]
     allowed_values: tuple[str, ...]
 
 
@@ -41,6 +43,7 @@ def resolve_field(
     slots: dict[str, Any],
     catalog: SchemaCatalog,
     project_root: Path,
+    enrichment: SemanticEnrichmentIndex | None = None,
 ) -> ResolvedField | None:
     technical = _extract_technical_field(question, slots)
     if technical is not None:
@@ -52,7 +55,7 @@ def resolve_field(
         if column is None:
             return None
         label = f"{table.name}.{column.name}"
-        return _build_resolved(label, table, column, project_root)
+        return _build_resolved(label, table, column, project_root, enrichment)
 
     label = _string(slots.get("field_name")) or _extract_quoted_field(question)
     if not label:
@@ -61,7 +64,7 @@ def resolve_field(
     if match is None:
         return None
     table, column = match
-    return _build_resolved(label, table, column, project_root)
+    return _build_resolved(label, table, column, project_root, enrichment)
 
 
 def explain_field(resolved: ResolvedField) -> tuple[str, dict[str, Any]]:
@@ -72,8 +75,12 @@ def explain_field(resolved: ResolvedField) -> tuple[str, dict[str, Any]]:
     ]
     if resolved.ontology_notes:
         lines.append(resolved.ontology_notes)
+    elif resolved.enrichment_notes:
+        lines.append(" ".join(resolved.enrichment_notes))
     else:
         lines.append(_default_meaning(resolved))
+    if resolved.enrichment_notes and resolved.ontology_notes:
+        lines.append(" ".join(resolved.enrichment_notes))
     if resolved.allowed_values:
         values = "、".join(resolved.allowed_values)
         lines.append(f"常见取值：{values}。")
@@ -108,9 +115,13 @@ def _build_resolved(
     table: TableSchema,
     column: ColumnSchema,
     project_root: Path,
+    enrichment: SemanticEnrichmentIndex | None = None,
 ) -> ResolvedField:
     ontology = _load_ontology_property(table.object_name, column.name, project_root)
     allowed_values = _load_allowed_values(ontology.get("value_type"), project_root)
+    enrichment_notes = ()
+    if enrichment is not None:
+        enrichment_notes = enrichment.field_notes(table.name, column.name)
     return ResolvedField(
         query_label=query_label,
         table_name=table.name,
@@ -121,6 +132,7 @@ def _build_resolved(
         source_class=table.source_class,
         ontology_display_name=ontology.get("display_name"),
         ontology_notes=ontology.get("notes"),
+        enrichment_notes=enrichment_notes,
         allowed_values=allowed_values,
     )
 

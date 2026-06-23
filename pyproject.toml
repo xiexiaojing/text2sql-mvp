@@ -12,6 +12,7 @@ dependencies = [
   "pydantic>=2.8",
   "PyMySQL>=1.1",
   "PyYAML>=6.0",
+  "gmssl>=3.2",
   "uvicorn>=0.30",
 ]
 

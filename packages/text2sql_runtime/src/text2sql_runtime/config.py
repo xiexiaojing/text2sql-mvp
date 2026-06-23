@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .field_encryption import FieldEncryptionSettings
+
 
 @dataclass(frozen=True)
 class MySqlSettings:
@@ -119,6 +121,7 @@ class RuntimeSettings:
     llm: LlmSettings
     intent_vector: IntentVectorSettings
     performance: dict[str, Any]
+    field_encryption: FieldEncryptionSettings
 
     @property
     def live_execution(self) -> bool:
@@ -200,6 +203,7 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
         llm=llm,
         intent_vector=intent_vector,
         performance=performance,
+        field_encryption=FieldEncryptionSettings.from_env(),
     )
 
 

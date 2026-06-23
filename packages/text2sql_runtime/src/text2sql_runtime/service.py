@@ -12,6 +12,7 @@ from .config import IntentRoutingSettings, RuntimeSettings, load_settings
 from .context import SchemaContextBuilder
 from .conversation import contextualize_question
 from .executor import SqlExecutor, build_executor
+from .field_encryption import encrypt_sensitive_query_params
 from .field_explanation import explain_field, resolve_field
 from .column_labels import EntityColumnLabelIndex
 from .formatter import ResultFormatter
@@ -20,6 +21,7 @@ from .memory import MemoryRecord, SQLiteMemoryStore
 from .models import EstimateResult, ExecutionResult, QueryInput, QueryResult, RejectedQuery
 from .router import QueryRouter
 from .schema import SchemaCatalog
+from .semantic_enrichment import SemanticEnrichmentIndex
 from .semantics import SemanticIndex
 from .sql_guard import SqlGuard
 from .sql_policy import ensure_limit, inject_domain_filter
@@ -55,6 +57,7 @@ class Text2SqlService:
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
             routing_settings=IntentRoutingSettings.from_performance(settings.performance),
+            field_encryption=settings.field_encryption,
         )
         self.router = QueryRouter(
             catalog,
@@ -62,10 +65,14 @@ class Text2SqlService:
             settings.performance,
             allow_sensitive_fields=settings.allow_sensitive_fields,
         )
+        self.enrichment = SemanticEnrichmentIndex.from_config(
+            settings.project_root / "configs" / "entity_enrichment.yaml",
+        )
         self.context_builder = SchemaContextBuilder(
             catalog,
             semantics,
             allow_sensitive_fields=settings.allow_sensitive_fields,
+            enrichment=self.enrichment,
         )
         fallback = SchemaDrivenSqlGenerator(
             catalog,
@@ -98,6 +105,7 @@ class Text2SqlService:
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
             routing_settings=IntentRoutingSettings.from_performance(settings.performance),
+            field_encryption=settings.field_encryption,
         )
         return cls(
             settings=settings,
@@ -206,6 +214,7 @@ class Text2SqlService:
                     semantic_plan.slots,
                     self.catalog,
                     self.settings.project_root,
+                    enrichment=self.enrichment,
                 )
                 if resolved is None:
                     raise RejectedQuery(
@@ -274,6 +283,11 @@ class Text2SqlService:
                 query_input.domain_id,
             )
             params = {**generated.params, **domain_params}
+            params = encrypt_sensitive_query_params(
+                params,
+                intent_id=semantic_plan.intent or "",
+                settings=self.settings.field_encryption,
+            )
             execution_params = dict(params)
             guarded_sql = ensure_limit(sql_with_domain, default_limit, max_limit)
             guard_result = self.guard.validate(guarded_sql)

@@ -5,6 +5,7 @@ from typing import Any
 from .conversation import conversation_context_lines
 from .memory import MemoryRecord, format_memory_context_lines
 from .schema import SchemaCatalog
+from .semantic_enrichment import SemanticEnrichmentIndex
 from .semantics import SemanticIndex, epoch_ms_for_age_at_least
 
 
@@ -14,10 +15,12 @@ class SchemaContextBuilder:
         catalog: SchemaCatalog,
         semantics: SemanticIndex,
         allow_sensitive_fields: bool = False,
+        enrichment: SemanticEnrichmentIndex | None = None,
     ) -> None:
         self.catalog = catalog
         self.semantics = semantics
         self.allow_sensitive_fields = allow_sensitive_fields
+        self.enrichment = enrichment or SemanticEnrichmentIndex(global_notes=(), tables={})
 
     def build(
         self,
@@ -58,6 +61,12 @@ class SchemaContextBuilder:
         memory_lines = format_memory_context_lines(memories or [])
         if memory_lines:
             lines.extend(memory_lines)
+            lines.append("")
+        enrichment_lines = self.enrichment.context_lines(question, candidate_tables)
+        if enrichment_lines:
+            lines.append("Business enrichment notes (from offline semantics):")
+            for note in enrichment_lines:
+                lines.append(f"- {note}")
             lines.append("")
         sensitive_hint = self._sensitive_filter_hint(question)
         if sensitive_hint:

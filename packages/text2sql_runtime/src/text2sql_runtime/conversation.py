@@ -86,6 +86,100 @@ def contextualize_question(question: str, history: list[dict[str, Any]] | None) 
             "rewriteReason": "chart_type_follow_up",
         }
 
+    from .disambiguation import rewrite_person_count_follow_up
+
+    person_count_rewritten = rewrite_person_count_follow_up(current, normalized_history)
+    if person_count_rewritten and person_count_rewritten != current:
+        return person_count_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": person_count_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "person_count_choice_follow_up",
+        }
+
+    from .disambiguation import rewrite_elderly_follow_up
+
+    elderly_rewritten = rewrite_elderly_follow_up(current, normalized_history)
+    if elderly_rewritten and elderly_rewritten != current:
+        return elderly_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": elderly_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "elderly_default_caliber_follow_up",
+        }
+
+    from .disambiguation import rewrite_property_company_contact_follow_up
+
+    property_contact_rewritten = rewrite_property_company_contact_follow_up(current, normalized_history)
+    if property_contact_rewritten and property_contact_rewritten != current:
+        return property_contact_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": property_contact_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "property_company_contact_role_follow_up",
+        }
+
+    from .phone_follow_up import rewrite_phone_detail_follow_up
+
+    phone_detail_rewritten = rewrite_phone_detail_follow_up(current, normalized_history)
+    if phone_detail_rewritten and phone_detail_rewritten != current:
+        return phone_detail_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": phone_detail_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "phone_detail_follow_up",
+        }
+
+    from .list_follow_up import rewrite_list_detail_follow_up
+
+    list_detail_rewritten = rewrite_list_detail_follow_up(current, normalized_history)
+    if list_detail_rewritten and list_detail_rewritten != current:
+        return list_detail_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": list_detail_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "list_detail_follow_up",
+        }
+
+    from .ledger_follow_up import rewrite_ledger_updater_follow_up
+
+    ledger_updater_rewritten = rewrite_ledger_updater_follow_up(current, normalized_history)
+    if ledger_updater_rewritten and ledger_updater_rewritten != current:
+        return ledger_updater_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": ledger_updater_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "ledger_updater_follow_up",
+        }
+
+    from .grid_follow_up import is_grid_switch_follow_up, rewrite_grid_switch_follow_up
+
+    grid_switch_rewritten = rewrite_grid_switch_follow_up(current, normalized_history)
+    if grid_switch_rewritten and grid_switch_rewritten != current:
+        return grid_switch_rewritten, {
+            "kind": "conversation",
+            "status": "ok",
+            "originalQuestion": question,
+            "effectiveQuestion": grid_switch_rewritten,
+            "history": normalized_history[-4:],
+            "rewriteReason": "grid_switch_follow_up",
+        }
+
+    if is_grid_switch_follow_up(current):
+        return current, None
+
     previous_user = _last_user_message(normalized_history)
     if not previous_user:
         return current, None

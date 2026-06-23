@@ -1,0 +1,33 @@
+version: 1
+notes:
+  - 离线 enrichment 轻量版：从业务口径整理，供 prompt 与字段解释按相关表 top-k 注入。
+  - 可用 scripts/enrich_semantics.py 扫描 JPA @Convert 加密字段并合并更新。
+
+global_notes:
+  - 后端统一注入 tenant_id 租户过滤；模板 SQL 不必手写租户条件。
+  - 退款类问题优先 refund_order；商户排名/交易额类需 join merchant 与 payment_order。
+
+tables:
+  payment_order:
+    notes:
+      - 支付交易主表；channel 为支付渠道，status 为订单状态。
+      - amount 为交易金额（分或元，以库内实际口径为准）；created_at 为下单时间。
+    fields:
+      payer_mobile:
+        notes:
+          - SM4 加密存储（sm4: 前缀）时，仅支持完整手机号精确等于；前缀/后缀 LIKE 不可用。
+      channel:
+        notes:
+          - 支付渠道枚举；按渠道统计/分布类意图 GROUP BY channel。
+      status:
+        notes:
+          - 订单状态；按状态统计类意图 GROUP BY status。
+
+  refund_order:
+    notes:
+      - 退款记录，通常通过 payment_order_id 关联原支付订单。
+      - 退款趋势/每日统计按 refund 时间字段聚合。
+
+  merchant:
+    notes:
+      - 商户主数据；商户数 COUNT merchant；交易额排名需 join payment_order 按 amount 聚合。
