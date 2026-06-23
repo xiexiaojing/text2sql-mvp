@@ -115,3 +115,6 @@ class QueryResult:
     interaction_logs: list[dict[str, Any]] = field(default_factory=list)
     semantic_plan: dict[str, Any] | None = None
     echarts_option: dict[str, Any] | None = None
+    execution_rows: list[dict[str, Any]] | None = None
+    execution_params: dict[str, Any] | None = None
+    applied_memories: list[dict[str, Any]] | None = None

@@ -441,6 +441,49 @@ def audit(query_id: str) -> dict[str, Any]:
     return record
 
 
+@app.post("/v1/memories/confirm")
+def confirm_memory(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return service().confirm_memory(
+            content=_required_str(payload, "content"),
+            scope=_required_str(payload, "scope"),
+            kind=_optional_str(payload, "kind") or "correction",
+            title=_optional_str(payload, "title"),
+            domain_id=_optional_str(payload, "domainId", "domain_id"),
+            user_id=_optional_str(payload, "userId", "user_id"),
+            keywords=_optional_string_list(payload, "keywords"),
+            source_query_id=_optional_str(payload, "sourceQueryId", "source_query_id"),
+            confirmed_by=_optional_str(payload, "confirmedBy", "confirmed_by"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/v1/memories")
+def list_memories(
+    domainId: Optional[str] = None,
+    userId: Optional[str] = None,
+    scope: Optional[str] = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
+    return service().list_memories(
+        domain_id=domainId,
+        user_id=userId,
+        scope=scope,
+        limit=limit,
+    )
+
+
+@app.delete("/v1/memories/{memory_id}")
+def deactivate_memory(memory_id: str) -> dict[str, Any]:
+    deleted = service().deactivate_memory(memory_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="memory_id not found")
+    return {"memoryId": memory_id, "active": False}
+
+
 @app.get("/v1/schema/summary")
 def schema_summary() -> dict[str, Any]:
     return service().schema_summary()
@@ -495,6 +538,15 @@ def _optional_int(payload: dict[str, Any], *keys: str) -> Optional[int]:
     if parsed < 1 or parsed > 1000:
         raise HTTPException(status_code=422, detail=f"Field out of range 1..1000: {keys[0]}")
     return parsed
+
+
+def _optional_string_list(payload: dict[str, Any], key: str) -> list[str] | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise HTTPException(status_code=422, detail=f"Expected list field: {key}")
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _optional_history(payload: dict[str, Any]) -> list[dict[str, str]]:

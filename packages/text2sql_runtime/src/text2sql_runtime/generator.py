@@ -12,7 +12,7 @@ import httpx
 from .config import LlmSettings
 from .models import GeneratedSql, RejectedQuery, TableSchema
 from .schema import SchemaCatalog
-from .semantics import SemanticIndex, epoch_ms_for_age_at_least, month_start_epoch_ms
+from .semantics import SemanticIndex, epoch_ms_for_age_at_least, is_set_epoch_ms_sql, month_start_epoch_ms
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,10 @@ class SchemaDrivenSqlGenerator:
                 filters.append(f"{self._alias(primary_table)}.create_time >= {month_start_epoch_ms()}")
         for (table, column), age in age_rules.items():
             alias = self._alias(table)
-            filters.append(f"{alias}.{column} <= {epoch_ms_for_age_at_least(age)}")
+            column_ref = f"{alias}.{column}"
+            filters.append(
+                f"{is_set_epoch_ms_sql(column_ref)} AND {column_ref} <= {epoch_ms_for_age_at_least(age)}"
+            )
         return tuple(filters), tuple(dict.fromkeys(required_tables))
 
     def _sensitive_exact_filter(self, question: str, primary_table: str) -> str | None:
@@ -180,11 +183,6 @@ class SchemaDrivenSqlGenerator:
     ) -> tuple[str, str] | None:
         if not self._is_group_question(question):
             return None
-        if "网格" in question and "community_grid" in self.catalog.table_names:
-            grid = self.catalog.require("community_grid")
-            if grid.column("name") and self._join_path("community_grid", primary_table):
-                return "community_grid", "name"
-
         group_keywords = self._group_keywords(question)
         search_tables = [primary_table] + [
             table for table in candidate_tables if table != primary_table and self.catalog.get(table)
@@ -205,22 +203,9 @@ class SchemaDrivenSqlGenerator:
                 keywords.append(match.group(1).strip())
         keyword_aliases = {
             "状态": ["状态", "status"],
-            "分类": [
-                "分类",
-                "类别",
-                "category",
-                "question_namet",
-                "question_names",
-                "question_namef",
-                "activity_category_name",
-                "sub_activity_category_name",
-            ],
+            "分类": ["分类", "类别", "category"],
             "渠道": ["渠道", "来源", "channel", "source", "order_from"],
-            "性别": ["性别", "sexual", "gender"],
-            "网格": ["网格", "name"],
-            "活动": ["活动", "name"],
-            "报名": ["报名", "sign_up_status", "sign_in_status"],
-            "走访": ["走访", "visit_way", "visiting_status", "visiting_type"],
+            "商户": ["商户", "merchant", "merchant_name"],
         }
         for label, values in keyword_aliases.items():
             if label in question:
@@ -381,18 +366,9 @@ class SchemaDrivenSqlGenerator:
         parts = table_name.split("_")
         base = "".join(part[0] for part in parts if part)
         aliases = {
-            "resident": "r",
-            "community_grid": "g",
-            "grid_house_node_relation": "gh",
-            "residence_address": "ra",
-            "tag_relation": "tr",
-            "tag_info": "ti",
-            "party_member": "pm",
-            "community_order": "co",
-            "unified_complaint": "uc",
-            "visiting_record": "vr",
-            "community_activity": "a",
-            "activity_sign_up_record": "s",
+            "payment_order": "po",
+            "refund_order": "ro",
+            "merchant": "m",
         }
         return aliases.get(table_name, base or "t")
 

@@ -52,6 +52,10 @@ class SemanticIndex:
         return any(keyword.lower() in lowered for keyword in self.sensitive_keywords)
 
 
+def is_set_epoch_ms_sql(column: str) -> str:
+    return f"({column} IS NOT NULL AND {column} <> 0)"
+
+
 def epoch_ms_for_age_at_least(age: int, today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     try:
@@ -64,6 +68,12 @@ def epoch_ms_for_age_at_least(age: int, today: dt.date | None = None) -> int:
 def month_start_epoch_ms(today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     start = dt.date(current.year, current.month, 1)
+    return int(dt.datetime.combine(start, dt.time.min).timestamp() * 1000)
+
+
+def year_start_epoch_ms(today: dt.date | None = None) -> int:
+    current = today or dt.date.today()
+    start = dt.date(current.year, 1, 1)
     return int(dt.datetime.combine(start, dt.time.min).timestamp() * 1000)
 
 

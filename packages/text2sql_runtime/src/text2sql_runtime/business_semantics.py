@@ -20,7 +20,7 @@ from .semantics import (
     week_end_epoch_ms,
     week_start_epoch_ms,
 )
-from .config import IntentVectorSettings, LlmSettings, load_yaml
+from .config import IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
 
 CHINESE_NAME_RE = re.compile(r"[\u4e00-\u9fa5]{2,4}")
 PHONE_RE = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
@@ -120,12 +120,14 @@ class BusinessSemanticIndex:
         vector_index: IntentVectorIndex | None = None,
         entity_query_compiler: EntityQueryCompiler | None = None,
         llm_slot_policy: str | None = None,
+        routing_settings: IntentRoutingSettings | None = None,
     ) -> None:
         self.entities = entities
         self.intents = intents
         self.templates = templates
         self.entity_query_compiler = entity_query_compiler or EntityQueryCompiler({})
         self._intents_by_id = {intent.intent_id: intent for intent in intents}
+        self.routing = routing_settings or IntentRoutingSettings()
         self.vector_index = vector_index or build_intent_vector_index(vector_settings)
         self.slot_extractor = slot_extractor or (LlmSlotExtractor(llm_settings) if llm_settings else None)
         self._llm_configured = bool(llm_settings and llm_settings.configured)
@@ -144,6 +146,7 @@ class BusinessSemanticIndex:
         slot_extractor: LlmSlotExtractor | None = None,
         vector_index: IntentVectorIndex | None = None,
         llm_slot_policy: str | None = None,
+        routing_settings: IntentRoutingSettings | None = None,
     ) -> "BusinessSemanticIndex":
         if not path.exists():
             return cls(
@@ -156,8 +159,13 @@ class BusinessSemanticIndex:
                 vector_index=vector_index,
                 entity_query_compiler=EntityQueryCompiler({}),
                 llm_slot_policy=llm_slot_policy,
+                routing_settings=routing_settings,
             )
         raw = load_yaml(path)
+        performance_path = path.parent / "performance.yaml"
+        routing = routing_settings or IntentRoutingSettings.from_performance(
+            load_yaml(performance_path) if performance_path.exists() else {}
+        )
         intents = [
             BusinessIntent(
                 intent_id=str(item["id"]),
@@ -212,6 +220,7 @@ class BusinessSemanticIndex:
             vector_index=vector_index,
             entity_query_compiler=EntityQueryCompiler.from_config(raw.get("entity_query_schemas")),
             llm_slot_policy=llm_slot_policy,
+            routing_settings=routing,
         )
 
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
@@ -221,6 +230,13 @@ class BusinessSemanticIndex:
             matched = self._best_intent(question)
             if matched is not None:
                 intent, confidence = matched
+                if not self._passes_lexical_only_gate(question, intent, confidence):
+                    return SemanticPlan(
+                        status="unsupported",
+                        reason=UNCONFIGURED_SEMANTIC_REASON,
+                        elapsed_ms=self._elapsed_ms(started),
+                        slot_source="legacy_keywords_rejected",
+                    )
                 slots = self._complete_slots(
                     question,
                     intent,
@@ -280,6 +296,8 @@ class BusinessSemanticIndex:
         slots: dict[str, Any]
         slot_source: str
         slot_elapsed_ms: int
+        llm_selected = False
+        llm_confidence = 0.0
         if extraction and extraction.intent_id and extraction.intent_id in self._intents_by_id:
             intent = self._intents_by_id[extraction.intent_id]
             selected_candidate = self._candidate_for_intent(candidates, intent.intent_id) or candidates[0]
@@ -289,12 +307,27 @@ class BusinessSemanticIndex:
                 extraction.slots,
                 use_heuristic=False,
             )
+            llm_confidence = float(extraction.confidence or 0.0)
             confidence = extraction.confidence or _confidence_from_distance(selected_candidate.distance)
             slot_source = extraction.source
             slot_elapsed_ms = extraction.elapsed_ms
+            llm_selected = extraction.decision == "select"
         else:
             selected_candidate = candidates[0]
             intent = self._intents_by_id[selected_candidate.intent_id]
+            if self.routing.require_high_confidence_without_llm and not self._passes_executable_routing_gate(
+                question,
+                intent,
+                selected_candidate,
+                candidates,
+            ):
+                return SemanticPlan(
+                    status="unsupported",
+                    reason=UNCONFIGURED_SEMANTIC_REASON,
+                    elapsed_ms=self._elapsed_ms(started),
+                    candidate_intents=candidate_intents,
+                    slot_source="heuristic_low_confidence",
+                )
             slots = self._complete_slots(
                 question,
                 intent,
@@ -314,6 +347,36 @@ class BusinessSemanticIndex:
             slot_source,
             extraction.slots if extraction else {},
         )
+
+        if intent.status == "executable" and llm_selected:
+            if llm_confidence < self.routing.min_llm_select_confidence and not self._passes_executable_routing_gate(
+                question,
+                intent,
+                selected_candidate,
+                candidates,
+            ):
+                return SemanticPlan(
+                    status="unsupported",
+                    reason=UNCONFIGURED_SEMANTIC_REASON,
+                    elapsed_ms=self._elapsed_ms(started),
+                    candidate_intents=candidate_intents,
+                    slot_source=f"{slot_source}_llm_low_confidence",
+                    slot_elapsed_ms=slot_elapsed_ms,
+                )
+        elif intent.status == "executable" and not llm_selected and not self._passes_executable_routing_gate(
+            question,
+            intent,
+            selected_candidate,
+            candidates,
+        ):
+            return SemanticPlan(
+                status="unsupported",
+                reason=UNCONFIGURED_SEMANTIC_REASON,
+                elapsed_ms=self._elapsed_ms(started),
+                candidate_intents=candidate_intents,
+                slot_source=f"{slot_source}_routing_rejected",
+                slot_elapsed_ms=slot_elapsed_ms,
+            )
 
         return self._build_plan(
             intent,
@@ -348,7 +411,7 @@ class BusinessSemanticIndex:
                 _empty(slots.get("table_name")) or _empty(slots.get("column_name"))
             ):
                 status = "needs_clarification"
-                reason = "请说明要查询哪个字段，例如：resident.residence_status 或「居住状况」。"
+                reason = "请说明要查询哪个字段，例如：payment_order.status 或「订单状态」。"
         elif status == "metadata":
             pass
         elif status == "executable" and missing_slots:
@@ -744,6 +807,82 @@ class BusinessSemanticIndex:
                 slots["card_no"] = match.group(1)
         return slots
 
+    def _normalized_question(self, question: str) -> str:
+        return re.sub(r"\s+", "", question.strip())
+
+    def _question_matches_intent_example(self, question: str, intent: BusinessIntent) -> bool:
+        normalized_question = self._normalized_question(question)
+        for example in intent.examples:
+            if not example:
+                continue
+            normalized_example = self._normalized_question(example)
+            if normalized_question == normalized_example or example in question:
+                return True
+        return False
+
+    def _candidate_gap(self, candidates: list[IntentVectorCandidate]) -> float:
+        if len(candidates) < 2:
+            return 1.0
+        return candidates[1].distance - candidates[0].distance
+
+    def _passes_lexical_only_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        confidence: float,
+    ) -> bool:
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if confidence >= self.routing.min_executable_confidence:
+            return True
+        return False
+
+    def _is_ambiguous_candidate_set(self, candidates: list[IntentVectorCandidate]) -> bool:
+        if len(candidates) < 2:
+            return False
+        first = candidates[0]
+        second = candidates[1]
+        if first.distance > self.routing.executable_max_distance:
+            return False
+        if second.distance > self.routing.executable_max_distance:
+            return False
+        return self._candidate_gap(candidates) < self.routing.min_ambiguity_gap
+
+    def _passes_executable_routing_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        selected_candidate: IntentVectorCandidate,
+        candidates: list[IntentVectorCandidate],
+    ) -> bool:
+        if intent.status != "executable":
+            return True
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if selected_candidate.distance <= 0.01:
+            return True
+        lexical = self._lexical_candidate(question)
+        if (
+            lexical is not None
+            and lexical.intent_id == intent.intent_id
+            and lexical.distance <= self.routing.strong_lexical_distance
+        ):
+            return True
+        if selected_candidate.matched_query == "keyword_match" and lexical is not None:
+            if (
+                lexical.intent_id == intent.intent_id
+                and lexical.distance <= self.routing.strong_lexical_distance + 0.02
+            ):
+                return True
+        distance = selected_candidate.distance
+        if distance > self.routing.executable_max_distance:
+            return False
+        if _confidence_from_distance(distance) < self.routing.min_executable_confidence:
+            return False
+        if self._is_ambiguous_candidate_set(candidates):
+            return False
+        return True
+
     def _try_fast_heuristic_plan(
         self,
         question: str,
@@ -798,17 +937,16 @@ class BusinessSemanticIndex:
             normalized_example = re.sub(r"\s+", "", example.strip())
             if normalized_question == normalized_example or example in question:
                 return True
-        if selected_candidate.distance <= _FAST_LLM_SKIP_VECTOR_DISTANCE:
+        if selected_candidate.distance <= self.routing.fast_path_max_distance:
             if len(candidates) == 1:
                 return True
-            second_distance = candidates[1].distance
-            if second_distance - selected_candidate.distance >= 0.08:
+            if self._candidate_gap(candidates) >= self.routing.min_candidate_gap:
                 return True
         lexical = self._lexical_candidate(question)
         if (
             lexical is not None
             and lexical.intent_id == intent.intent_id
-            and lexical.distance <= _STRONG_LEXICAL_DISTANCE
+            and lexical.distance <= self.routing.strong_lexical_distance
         ):
             return True
         return False
