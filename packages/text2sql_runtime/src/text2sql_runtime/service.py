@@ -407,7 +407,32 @@ class Text2SqlService:
         keywords: list[str] | None = None,
         source_query_id: str | None = None,
         confirmed_by: str | None = None,
+        replace_memory_ids: list[str] | None = None,
+        allow_conflict: bool = False,
     ) -> dict[str, Any]:
+        duplicate, conflicts, _ = self.memory_store.prepare_create(
+            content=content,
+            scope=scope,
+            kind=kind,
+            title=title,
+            domain_id=domain_id,
+            user_id=user_id,
+            keywords=keywords,
+        )
+        if duplicate is not None:
+            return {
+                "status": "exists",
+                "memory": duplicate.to_dict(),
+                "conflicts": [],
+                "replacedMemoryIds": [],
+            }
+        if conflicts and not allow_conflict and not replace_memory_ids:
+            return {
+                "status": "conflict",
+                "memory": None,
+                "conflicts": [item.to_dict() for item in conflicts],
+                "replacedMemoryIds": [],
+            }
         record = self.memory_store.create(
             content=content,
             scope=scope,
@@ -418,8 +443,15 @@ class Text2SqlService:
             keywords=keywords,
             source_query_id=source_query_id,
             confirmed_by=confirmed_by,
+            replace_memory_ids=replace_memory_ids,
+            allow_conflict=allow_conflict,
         )
-        return record.to_dict()
+        return {
+            "status": "created",
+            "memory": record.to_dict(),
+            "conflicts": [item.to_dict() for item in conflicts],
+            "replacedMemoryIds": list(replace_memory_ids or []),
+        }
 
     def list_memories(
         self,

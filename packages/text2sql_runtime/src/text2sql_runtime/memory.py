@@ -11,6 +11,7 @@ from typing import Any
 
 MEMORY_SCOPES = frozenset({"global", "domain", "user"})
 MEMORY_KINDS = frozenset({"caliber", "mapping", "filter", "correction"})
+CONFLICT_KINDS = frozenset({"caliber", "mapping", "filter"})
 
 _TOKEN_RE = re.compile(r"[\u4e00-\u9fff]{2,}|\w{2,}")
 
@@ -120,6 +121,90 @@ def score_memory_relevance(question: str, memory: MemoryRecord) -> float:
     return score
 
 
+def memory_keyword_set(
+    *,
+    content: str,
+    title: str | None = None,
+    keywords: list[str] | None = None,
+) -> set[str]:
+    tokens: set[str] = set()
+    for token in keywords or infer_memory_keywords(content, title):
+        normalized = str(token).strip().lower()
+        if len(normalized) >= 2:
+            tokens.add(normalized)
+    if title:
+        for token in infer_memory_keywords(title):
+            normalized = token.strip().lower()
+            if len(normalized) >= 2:
+                tokens.add(normalized)
+    return tokens
+
+
+def find_duplicate_memory(
+    candidates: list[MemoryRecord],
+    *,
+    content: str,
+    scope: str,
+    kind: str,
+    domain_id: str | None,
+    user_id: str | None,
+) -> MemoryRecord | None:
+    normalized_content = str(content or "").strip()
+    if not normalized_content:
+        return None
+    for record in candidates:
+        if record.scope != scope or record.kind != kind:
+            continue
+        if scope == "domain" and record.domain_id != domain_id:
+            continue
+        if scope == "user" and (record.domain_id != domain_id or record.user_id != user_id):
+            continue
+        if record.content.strip() == normalized_content:
+            return record
+    return None
+
+
+def find_memory_conflicts(
+    candidates: list[MemoryRecord],
+    *,
+    content: str,
+    scope: str,
+    kind: str,
+    title: str | None = None,
+    domain_id: str | None = None,
+    user_id: str | None = None,
+    keywords: list[str] | None = None,
+) -> list[MemoryRecord]:
+    normalized_kind = normalize_memory_kind(kind)
+    if normalized_kind not in CONFLICT_KINDS:
+        return []
+    normalized_content = str(content or "").strip()
+    new_keywords = memory_keyword_set(content=normalized_content, title=title, keywords=keywords)
+    conflicts: list[MemoryRecord] = []
+    for record in candidates:
+        if record.scope != scope or record.kind != normalized_kind:
+            continue
+        if scope == "domain" and record.domain_id != domain_id:
+            continue
+        if scope == "user" and (record.domain_id != domain_id or record.user_id != user_id):
+            continue
+        if record.content.strip() == normalized_content:
+            continue
+        overlap = memory_keyword_set(
+            content=record.content,
+            title=record.title,
+            keywords=list(record.keywords),
+        ) & new_keywords
+        title_match = bool(
+            title
+            and record.title
+            and title.strip() == record.title.strip()
+        )
+        if title_match or len(overlap) >= 2 or (normalized_kind == "caliber" and len(overlap) >= 1):
+            conflicts.append(record)
+    return conflicts
+
+
 def format_memory_context_lines(memories: list[MemoryRecord]) -> list[str]:
     if not memories:
         return []
@@ -141,6 +226,65 @@ class SQLiteMemoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
 
+    def scoped_candidates(
+        self,
+        *,
+        scope: str,
+        domain_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[MemoryRecord]:
+        normalized_scope = normalize_memory_scope(scope)
+        if normalized_scope == "global":
+            return self.list_memories(scope="global", limit=200)
+        if normalized_scope == "domain":
+            return self.list_memories(domain_id=domain_id, scope="domain", limit=200)
+        return self.list_memories(domain_id=domain_id, user_id=user_id, scope="user", limit=200)
+
+    def prepare_create(
+        self,
+        *,
+        content: str,
+        scope: str,
+        kind: str = "correction",
+        title: str | None = None,
+        domain_id: str | None = None,
+        user_id: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> tuple[MemoryRecord | None, list[MemoryRecord], list[MemoryRecord]]:
+        normalized_scope = normalize_memory_scope(scope)
+        normalized_kind = normalize_memory_kind(kind)
+        validate_memory_scope_fields(
+            scope=normalized_scope,
+            domain_id=domain_id,
+            user_id=user_id,
+        )
+        candidates = self.scoped_candidates(
+            scope=normalized_scope,
+            domain_id=domain_id,
+            user_id=user_id,
+        )
+        duplicate = find_duplicate_memory(
+            candidates,
+            content=content,
+            scope=normalized_scope,
+            kind=normalized_kind,
+            domain_id=domain_id,
+            user_id=user_id,
+        )
+        if duplicate is not None:
+            return duplicate, [], []
+        conflicts = find_memory_conflicts(
+            candidates,
+            content=content,
+            scope=normalized_scope,
+            kind=normalized_kind,
+            title=title,
+            domain_id=domain_id,
+            user_id=user_id,
+            keywords=keywords,
+        )
+        return None, conflicts, candidates
+
     def create(
         self,
         *,
@@ -153,6 +297,8 @@ class SQLiteMemoryStore:
         keywords: list[str] | None = None,
         source_query_id: str | None = None,
         confirmed_by: str | None = None,
+        replace_memory_ids: list[str] | None = None,
+        allow_conflict: bool = False,
     ) -> MemoryRecord:
         normalized_content = str(content or "").strip()
         if not normalized_content:
@@ -166,6 +312,28 @@ class SQLiteMemoryStore:
             domain_id=domain_id,
             user_id=user_id,
         )
+        duplicate, conflicts, _ = self.prepare_create(
+            content=normalized_content,
+            scope=normalized_scope,
+            kind=normalized_kind,
+            title=title,
+            domain_id=domain_id,
+            user_id=user_id,
+            keywords=keywords,
+        )
+        if duplicate is not None:
+            return duplicate
+        if conflicts and not allow_conflict and not replace_memory_ids:
+            conflict_ids = ", ".join(item.memory_id for item in conflicts)
+            raise ValueError(
+                f"与同域已有记忆冲突（{conflict_ids}），请确认替换或取消写入"
+            )
+        if replace_memory_ids:
+            allowed_ids = {item.memory_id for item in conflicts}
+            for memory_id in replace_memory_ids:
+                if allowed_ids and memory_id not in allowed_ids:
+                    raise ValueError(f"不可替换非冲突记忆: {memory_id}")
+                self.deactivate(memory_id)
         keyword_list = [
             str(item).strip()
             for item in (keywords or infer_memory_keywords(normalized_content, title))

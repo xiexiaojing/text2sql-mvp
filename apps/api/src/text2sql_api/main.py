@@ -454,6 +454,12 @@ def confirm_memory(payload: dict[str, Any]) -> dict[str, Any]:
             keywords=_optional_string_list(payload, "keywords"),
             source_query_id=_optional_str(payload, "sourceQueryId", "source_query_id"),
             confirmed_by=_optional_str(payload, "confirmedBy", "confirmed_by"),
+            replace_memory_ids=_optional_string_list(
+                payload,
+                "replaceMemoryIds",
+                "replace_memory_ids",
+            ),
+            allow_conflict=bool(payload.get("allowConflict", payload.get("allow_conflict", False))),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -540,13 +546,14 @@ def _optional_int(payload: dict[str, Any], *keys: str) -> Optional[int]:
     return parsed
 
 
-def _optional_string_list(payload: dict[str, Any], key: str) -> list[str] | None:
-    value = payload.get(key)
+def _optional_string_list(payload: dict[str, Any], *keys: str) -> list[str] | None:
+    value = _first_value(payload, *keys)
     if value is None:
         return None
     if not isinstance(value, list):
-        raise HTTPException(status_code=422, detail=f"Expected list field: {key}")
-    return [str(item).strip() for item in value if str(item).strip()]
+        raise HTTPException(status_code=422, detail=f"Expected list field: {keys[0]}")
+    items = [str(item).strip() for item in value if str(item).strip()]
+    return items or None
 
 
 def _optional_history(payload: dict[str, Any]) -> list[dict[str, str]]:

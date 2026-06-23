@@ -3,45 +3,117 @@ cases:
   - id: payment-order-count
     question: 支付订单总数是多少
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT COUNT(*) AS total
+      FROM payment_order po
+      WHERE po.tenant_id = %(domain_id)s
     expected:
       tables: [payment_order]
       features: [count, domain_filter]
+      compare_results: true
+
   - id: payment-channel-stat
     question: 支付订单按渠道统计
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT po.channel AS channel_value, COUNT(*) AS total
+      FROM payment_order po
+      WHERE po.tenant_id = %(domain_id)s
+      GROUP BY po.channel
+      ORDER BY total DESC
+      LIMIT 200
     expected:
       tables: [payment_order]
       features: [group_by, domain_filter]
+      compare_results: true
+      compare_columns: [channel_value, total]
+      ignore_row_order: true
+
   - id: payment-status-stat
     question: 支付订单按状态统计
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT po.status AS status_value, COUNT(*) AS total
+      FROM payment_order po
+      WHERE po.tenant_id = %(domain_id)s
+      GROUP BY po.status
+      ORDER BY total DESC
+      LIMIT 200
     expected:
       tables: [payment_order]
       features: [group_by, domain_filter]
+      compare_results: true
+      compare_columns: [status_value, total]
+      ignore_row_order: true
+
   - id: merchant-count
     question: 商户总数是多少
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT COUNT(*) AS total
+      FROM merchant m
+      WHERE m.tenant_id = %(domain_id)s
     expected:
       tables: [merchant]
       features: [count, domain_filter]
+      compare_results: true
+
   - id: refund-trend
     question: 近7天每日退款笔数趋势
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT DATE(ro.refund_time) AS refund_date, COUNT(*) AS total
+      FROM refund_order ro
+      WHERE ro.refund_time >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)
+        AND ro.tenant_id = %(domain_id)s
+      GROUP BY refund_date
+      ORDER BY refund_date
+      LIMIT 200
     expected:
       tables: [refund_order]
       features: [group_by, domain_filter]
+      compare_results: true
+      compare_columns: [refund_date, total]
+      ignore_row_order: false
+
   - id: channel-amount-chart
     question: 各支付渠道交易金额分布
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT po.channel AS channel_value, SUM(po.amount) AS total
+      FROM payment_order po
+      WHERE po.tenant_id = %(domain_id)s
+      GROUP BY po.channel
+      ORDER BY total DESC
+      LIMIT 200
     expected:
       tables: [payment_order]
       features: [group_by, domain_filter]
+      compare_results: true
+      compare_columns: [channel_value, total]
+      ignore_row_order: true
+
   - id: merchant-rank
     question: 商户交易金额排名
     domainId: demo-tenant-1
+    golden_sql: |
+      SELECT m.name AS merchant_name, SUM(po.amount) AS total
+      FROM merchant m
+      JOIN payment_order po ON po.merchant_id = m.id
+      WHERE m.tenant_id = %(domain_id)s
+        AND po.tenant_id = %(domain_id)s
+      GROUP BY m.id, m.name
+      ORDER BY total DESC
+      LIMIT %(result_limit)s
+    golden_params:
+      result_limit: 10
     expected:
       tables: [merchant, payment_order]
       features: [join, domain_filter]
+      compare_results: true
+      compare_columns: [merchant_name, total]
+      ignore_row_order: false
+
   - id: reject-unconfigured
     question: 请统计火星基地飞船泊位能耗
     domainId: demo-tenant-1

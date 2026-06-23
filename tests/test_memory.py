@@ -107,7 +107,9 @@ def test_memory_confirm_and_list_api(monkeypatch, service):
         },
     )
     assert created.status_code == 200
-    memory_id = created.json()["memoryId"]
+    payload = created.json()
+    assert payload["status"] == "created"
+    memory_id = payload["memory"]["memoryId"]
 
     listed = client.get("/v1/memories", params={"domainId": "domain-1"})
     assert listed.status_code == 200
@@ -115,3 +117,63 @@ def test_memory_confirm_and_list_api(monkeypatch, service):
 
     deleted = client.delete(f"/v1/memories/{memory_id}")
     assert deleted.status_code == 200
+
+
+def test_memory_confirm_reports_domain_conflict(monkeypatch, service):
+    service.confirm_memory(
+        content="退款口径默认只统计已成功退款",
+        scope="domain",
+        domain_id="domain-1",
+        kind="caliber",
+        title="退款口径",
+        keywords=["退款", "成功"],
+        confirmed_by="user-1",
+    )
+
+    monkeypatch.setattr(main, "service", lambda: service)
+    client = TestClient(main.app)
+    response = client.post(
+        "/v1/memories/confirm",
+        json={
+            "content": "退款口径默认只统计已退款且金额大于100元",
+            "scope": "domain",
+            "domainId": "domain-1",
+            "kind": "caliber",
+            "title": "退款口径",
+            "keywords": ["退款", "100元"],
+            "confirmedBy": "user-1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "conflict"
+    assert payload["memory"] is None
+    assert len(payload["conflicts"]) == 1
+
+
+def test_memory_confirm_can_replace_conflicting_memory(monkeypatch, service):
+    first = service.confirm_memory(
+        content="退款口径默认只统计已成功退款",
+        scope="domain",
+        domain_id="domain-1",
+        kind="caliber",
+        title="退款口径",
+        keywords=["退款", "成功"],
+        confirmed_by="user-1",
+    )
+    conflict_id = first["memory"]["memoryId"]
+
+    replaced = service.confirm_memory(
+        content="退款口径默认只统计已退款且金额大于100元",
+        scope="domain",
+        domain_id="domain-1",
+        kind="caliber",
+        title="退款口径",
+        keywords=["退款", "100元"],
+        confirmed_by="user-1",
+        replace_memory_ids=[conflict_id],
+    )
+
+    assert replaced["status"] == "created"
+    assert conflict_id in replaced["replacedMemoryIds"]
