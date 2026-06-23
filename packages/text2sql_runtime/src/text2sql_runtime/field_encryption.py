@@ -5,8 +5,6 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from gmssl.sm4 import SM4_ENCRYPT, CryptSM4
-
 DEFAULT_ENCRYPTION_KEY = "阿弥陀佛"
 DEFAULT_IV = "fix:code:iv:code"
 
@@ -54,6 +52,17 @@ def _pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
     return data + bytes([pad_len] * pad_len)
 
 
+def _load_sm4() -> tuple[Any, Any]:
+    try:
+        from gmssl.sm4 import SM4_ENCRYPT, CryptSM4
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Package 'gmssl' is required for SM4 field encryption. "
+            "Install project dependencies: pip install -e ."
+        ) from exc
+    return SM4_ENCRYPT, CryptSM4
+
+
 def is_stored_ciphertext(value: str) -> bool:
     lowered = value.strip().lower()
     return any(lowered.startswith(prefix) for prefix in _STORED_CIPHERTEXT_PREFIXES)
@@ -67,18 +76,19 @@ def encrypt_field_value(plaintext: str, settings: FieldEncryptionSettings) -> st
     if is_stored_ciphertext(plaintext):
         return plaintext
     encryption_type = settings.encryption_type
+    sm4_encrypt, crypt_sm4_cls = _load_sm4()
     if encryption_type == "sm4":
         key_bytes = _normalize_key(settings.key, "sm4")
         iv_bytes = DEFAULT_IV.encode("utf-8")
-        crypt_sm4 = CryptSM4()
-        crypt_sm4.set_key(key_bytes, SM4_ENCRYPT)
+        crypt_sm4 = crypt_sm4_cls()
+        crypt_sm4.set_key(key_bytes, sm4_encrypt)
         encrypted = crypt_sm4.crypt_cbc(iv_bytes, _pkcs7_pad(plaintext.encode("utf-8")))
         return "sm4:" + base64.b64encode(encrypted).decode("ascii")
     if encryption_type == "ss4":
         key_bytes = _normalize_key(settings.key, "ss4")
         iv_bytes = DEFAULT_IV.encode("utf-8")
-        crypt_sm4 = CryptSM4()
-        crypt_sm4.set_key(key_bytes, SM4_ENCRYPT)
+        crypt_sm4 = crypt_sm4_cls()
+        crypt_sm4.set_key(key_bytes, sm4_encrypt)
         encrypted = crypt_sm4.crypt_cbc(iv_bytes, _pkcs7_pad(plaintext.encode("utf-8")))
         return "ss4:" + base64.b64encode(encrypted).decode("ascii")
     raise ValueError(f"Unsupported encryption type: {encryption_type}")
