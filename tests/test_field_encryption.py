@@ -10,7 +10,7 @@ from text2sql_runtime.field_encryption import (
 def test_encrypt_field_value_matches_java_default_key():
     settings = FieldEncryptionSettings(enabled=True, key=DEFAULT_ENCRYPTION_KEY, encryption_type="sm4")
     encrypted = encrypt_field_value("110101199001011234", settings)
-    assert encrypted == "sm4:H7I5oeeo+X9JIqXxmtVTCrJmKznB9iov7C5daoo0ZDXjQvn+/Z+mB93v0zLrYFcl"
+    assert encrypted == "sm4:qJorHg4HKAcsfwZ1vYwjm3XID/NDyDirWqsFDlU7lCamVyfID+AQvgXnL3SZkgDt"
 
 
 def test_is_stored_ciphertext():

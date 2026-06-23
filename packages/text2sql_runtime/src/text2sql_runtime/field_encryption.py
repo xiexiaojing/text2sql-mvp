@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_ENCRYPTION_KEY = "阿弥陀佛"
+DEFAULT_ENCRYPTION_KEY = "小胖蟹"
 DEFAULT_IV = "fix:code:iv:code"
 
 CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON = (
