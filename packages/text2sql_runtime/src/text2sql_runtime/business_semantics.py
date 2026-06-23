@@ -1,34 +1,21 @@
 from __future__ import annotations
 
-import datetime as dt
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .address_parser import build_room_name_path_likes, parse_room_address
 from .entity_query import EntityQueryCompiler
 from .intent_vector import IntentVectorCandidate, IntentVectorIndex, build_intent_vector_index
 from .models import GeneratedSql, RejectedQuery
 from .rejection_reasons import UNCONFIGURED_SEMANTIC_REASON
 from .semantic_slot_extractor import LlmSlotExtractor, SlotExtractionResult
-from .semantics import (
-    epoch_ms_for_age_at_least,
-    month_end_epoch_ms,
-    month_start_epoch_ms,
-    week_end_epoch_ms,
-    week_start_epoch_ms,
-)
+from .semantic_slots import computed_values, derive_slots, extract_slots
 from .config import IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
 
-CHINESE_NAME_RE = re.compile(r"[\u4e00-\u9fa5]{2,4}")
-PHONE_RE = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
-CARD_RE = re.compile(r"(?<![A-Za-z0-9])([0-9Xx]{15,18})(?![A-Za-z0-9])")
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 OPTIONAL_BLOCK_RE = re.compile(r"\[\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*?)\]\]", re.DOTALL)
-_STRONG_LEXICAL_DISTANCE = 0.05
-_FAST_LLM_SKIP_VECTOR_DISTANCE = 0.35
 
 
 @dataclass(frozen=True)
@@ -411,7 +398,7 @@ class BusinessSemanticIndex:
                 _empty(slots.get("table_name")) or _empty(slots.get("column_name"))
             ):
                 status = "needs_clarification"
-                reason = "请说明要查询哪个字段，例如：payment_order.status 或「订单状态」。"
+                reason = "请说明要查询哪个字段，例如：table_name.column_name。"
         elif status == "metadata":
             pass
         elif status == "executable" and missing_slots:
@@ -547,67 +534,11 @@ class BusinessSemanticIndex:
         return slots
 
     def _derive_slots(self, intent: BusinessIntent, slots: dict[str, Any]) -> None:
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots and _empty(slots.get("age")):
-            slots["age"] = 60
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if not _empty(slots.get("sexual")):
-            normalized_sexual = _normalize_sexual(str(slots["sexual"]))
-            if normalized_sexual:
-                slots["sexual"] = normalized_sexual
-        if not _empty(slots.get("marital_status")):
-            normalized_marital_status = _normalize_marital_status(str(slots["marital_status"]))
-            if normalized_marital_status:
-                slots["marital_status"] = normalized_marital_status
-        if not _empty(slots.get("role_like")):
-            slots["role_like"] = _normalize_like_value(str(slots["role_like"]))
-        elif "role_like" in requested_slots and not _empty(slots.get("role")):
-            slots["role_like"] = _like_value(str(slots["role"]))
-        if not _empty(slots.get("tag_like")):
-            slots["tag_like"] = _normalize_like_value(str(slots["tag_like"]))
-        elif "tag_like" in requested_slots and not _empty(slots.get("tag_name")):
-            tag_name = str(slots["tag_name"])
-            slots["tag_like"] = "%独居%" if tag_name.startswith("独居") else _like_value(tag_name)
-        if not _empty(slots.get("party_branch_path_like")):
-            slots["party_branch_path_like"] = _normalize_party_branch_path_like(
-                str(slots["party_branch_path_like"])
-            )
-        elif not _empty(slots.get("party_branch_name")):
-            slots["party_branch_path_like"] = _party_branch_member_path_like(
-                str(slots["party_branch_name"])
-            )
-        like_slots = {
-            "merchant_name": "merchant_name_like",
-            "area_name": "area_like",
-            "category": "category_like",
-            "field_name": "field_like",
-            "skill": "skill_like",
-            "grid_name": "grid_name_like",
-            "person_name": "person_name_like",
-        }
-        for slot_name, like_slot in like_slots.items():
-            if not _empty(slots.get(like_slot)):
-                slots[like_slot] = _normalize_like_value(str(slots[like_slot]))
-            elif not _empty(slots.get(slot_name)):
-                slots[like_slot] = _like_value(str(slots[slot_name]))
-        if not _empty(slots.get("field_like")) and "tag_like" in requested_slots:
-            slots.setdefault("tag_like", str(slots["field_like"]))
-        if (
-            "address_like" in requested_slots
-            and not _empty(slots.get("address_like"))
-        ):
-            _derive_address_like_slots(slots, str(slots["address_like"]))
-        elif (
-            "address_like" in requested_slots
-            and not _empty(slots.get("address"))
-        ):
-            _derive_address_like_slots(slots, str(slots["address"]))
+        derive_slots(
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slots=slots,
+        )
 
     def _intent_vector_payload(self, intent: BusinessIntent) -> dict[str, Any]:
         semantic: dict[str, Any] = {
@@ -697,115 +628,13 @@ class BusinessSemanticIndex:
         return intent, round(confidence, 2)
 
     def _extract_slots(self, question: str, intent: BusinessIntent) -> dict[str, Any]:
-        slots: dict[str, Any] = dict(intent.slot_defaults)
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots:
-            slots.setdefault("age", _extract_age(question) or 60)
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "month_end_ms" in requested_slots:
-            slots["month_end_ms"] = month_end_epoch_ms()
-        if "week_start_ms" in requested_slots:
-            slots["week_start_ms"] = week_start_epoch_ms()
-        if "week_end_ms" in requested_slots:
-            slots["week_end_ms"] = week_end_epoch_ms()
-        if "current_year" in requested_slots:
-            slots["current_year"] = dt.date.today().year
-        if "current_month" in requested_slots:
-            slots["current_month"] = dt.date.today().month
-        if "apply_month_scope" in requested_slots and _question_has_month_scope(question):
-            slots["apply_month_scope"] = True
-        if "apply_week_scope" in requested_slots and _question_has_week_scope(question):
-            slots["apply_week_scope"] = True
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if "sexual" in requested_slots:
-            sexual = _extract_sexual(question, slots.get("sexual"))
-            if sexual:
-                slots["sexual"] = sexual
-        if "marital_status" in requested_slots:
-            marital_status = _extract_marital_status(question, slots.get("marital_status"))
-            if marital_status:
-                slots["marital_status"] = marital_status
-        if "person_name" in requested_slots:
-            name = _extract_person_name(question, intent.intent_id)
-            if name:
-                slots["person_name"] = name
-        if "party_branch_name" in requested_slots:
-            branch = _extract_party_branch(question)
-            if branch:
-                slots["party_branch_name"] = branch
-        if "grid_name" in requested_slots:
-            grid_name = _extract_grid_name(question)
-            if grid_name:
-                slots["grid_name"] = grid_name
-        if "address" in requested_slots or "address_like" in requested_slots:
-            address = _extract_address(question)
-            if address:
-                address = _normalize_compound_building_address(address)
-                slots["address"] = address
-                slots["address_like"] = _like_value(address)
-        if "role" in requested_slots or "role_like" in requested_slots:
-            role = _extract_role(question, intent.intent_id, slots.get("role"))
-            if role:
-                slots["role"] = role
-                slots["role_like"] = _like_value(role)
-        if "tag_name" in requested_slots:
-            tag_name = _extract_tag_name(question, slots.get("tag_name"))
-            if tag_name:
-                slots["tag_name"] = tag_name
-        if "tag_like" in requested_slots and not _empty(slots.get("tag_name")):
-            tag_name = str(slots["tag_name"])
-            slots["tag_like"] = "%独居%" if tag_name.startswith("独居") else _like_value(tag_name)
-        if "skill" in requested_slots or "skill_like" in requested_slots:
-            skill = _extract_skill(question, slots.get("skill"))
-            if skill:
-                slots["skill"] = skill
-                slots["skill_like"] = _like_value(skill)
-        if "merchant_name" in requested_slots or "merchant_name_like" in requested_slots:
-            merchant_name = _extract_merchant_name(question)
-            if merchant_name:
-                slots["merchant_name"] = merchant_name
-                slots["merchant_name_like"] = _like_value(merchant_name)
-        if "area_name" in requested_slots or "area_like" in requested_slots:
-            area_name = _extract_area_name(question)
-            if area_name:
-                slots["area_name"] = area_name
-                slots["area_like"] = _like_value(area_name)
-        if "category" in requested_slots or "category_like" in requested_slots:
-            category = _extract_category(question, slots.get("category"))
-            if category:
-                slots["category"] = category
-                slots["category_like"] = _like_value(category)
-        if "field_name" in requested_slots or "field_like" in requested_slots:
-            field_name = _extract_field_name(question, slots.get("field_name"))
-            if field_name:
-                slots["field_name"] = field_name
-                slots["field_like"] = _like_value(field_name)
-        if "result_limit" in requested_slots:
-            slots["result_limit"] = _extract_result_limit(question, int(slots.get("result_limit") or 10))
-        if intent.intent_id == "field_explanation":
-            match = re.search(
-                r"\b([a-z][a-z0-9_]*)\s*\.\s*([a-z][a-z0-9_]*)\b",
-                question,
-                re.IGNORECASE,
-            )
-            if match:
-                slots.setdefault("table_name", match.group(1).lower())
-                slots.setdefault("column_name", match.group(2).lower())
-                slots.setdefault("field_name", f"{match.group(1).lower()}.{match.group(2).lower()}")
-        if "phone" in requested_slots:
-            match = PHONE_RE.search(question)
-            if match:
-                slots["phone"] = match.group(1)
-        if "card_no" in requested_slots:
-            match = CARD_RE.search(question)
-            if match:
-                slots["card_no"] = match.group(1)
-        return slots
+        return extract_slots(
+            question,
+            intent_id=intent.intent_id,
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slot_defaults=intent.slot_defaults,
+        )
 
     def _normalized_question(self, question: str) -> str:
         return re.sub(r"\s+", "", question.strip())
@@ -991,7 +820,7 @@ class BusinessSemanticIndex:
         extracted_slots: dict[str, Any],
     ) -> tuple[BusinessIntent, IntentVectorCandidate, dict[str, Any], float, str]:
         lexical = self._lexical_candidate(question)
-        if lexical is None or lexical.distance > _STRONG_LEXICAL_DISTANCE:
+        if lexical is None or lexical.distance > self.routing.strong_lexical_distance:
             return intent, selected_candidate, slots, confidence, slot_source
 
         lexical_intent = self._intents_by_id.get(lexical.intent_id)
@@ -1016,7 +845,7 @@ class BusinessSemanticIndex:
         )
 
     def _render_sql(self, sql: str, slots: dict[str, Any]) -> str:
-        values = _computed_values(slots)
+        values = computed_values(slots)
 
         def optional_block(match: re.Match[str]) -> str:
             slot_name = match.group(1)
@@ -1036,439 +865,6 @@ class BusinessSemanticIndex:
         return int((time.monotonic() - started) * 1000)
 
 
-def _question_has_month_scope(question: str) -> bool:
-    return any(marker in question for marker in ("本月", "这个月", "当月"))
-
-
-def _question_has_week_scope(question: str) -> bool:
-    return any(marker in question for marker in ("本周", "这周", "当周"))
-
-
-def _computed_values(slots: dict[str, Any]) -> dict[str, int]:
-    age = int(slots.get("age") or 60)
-    today = dt.date.today()
-    return {
-        "age_cutoff_ms": int(slots.get("age_cutoff_ms") or epoch_ms_for_age_at_least(age)),
-        "age_cutoff_18_ms": int(slots.get("age_cutoff_18_ms") or epoch_ms_for_age_at_least(18)),
-        "age_cutoff_35_ms": int(slots.get("age_cutoff_35_ms") or epoch_ms_for_age_at_least(35)),
-        "age_cutoff_60_ms": int(slots.get("age_cutoff_60_ms") or epoch_ms_for_age_at_least(60)),
-        "month_start_ms": int(slots.get("month_start_ms") or month_start_epoch_ms()),
-        "month_end_ms": int(slots.get("month_end_ms") or month_end_epoch_ms(today)),
-        "week_start_ms": int(slots.get("week_start_ms") or week_start_epoch_ms(today)),
-        "week_end_ms": int(slots.get("week_end_ms") or week_end_epoch_ms(today)),
-        "year_start_ms": int(slots.get("year_start_ms") or _year_start_epoch_ms(today)),
-        "last_year_start_ms": int(slots.get("last_year_start_ms") or _year_start_epoch_ms(_add_years(today, -1))),
-        "last_year_end_ms": int(slots.get("last_year_end_ms") or _year_start_epoch_ms(today)),
-        "half_year_start_ms": int(slots.get("half_year_start_ms") or _date_to_epoch_ms(today - dt.timedelta(days=183))),
-        "senior_next_year_birth_start_ms": int(
-            slots.get("senior_next_year_birth_start_ms")
-            or _date_to_epoch_ms(dt.date(today.year + 1 - 80, 1, 1))
-        ),
-        "senior_next_year_birth_end_ms": int(
-            slots.get("senior_next_year_birth_end_ms")
-            or _date_to_epoch_ms(dt.date(today.year + 2 - 80, 1, 1))
-        ),
-        "result_limit": int(slots.get("result_limit") or 10),
-    }
-
-
-def _year_start_epoch_ms(today: dt.date | None = None) -> int:
-    current = today or dt.date.today()
-    start = dt.date(current.year, 1, 1)
-    return _date_to_epoch_ms(start)
-
-
-def _date_to_epoch_ms(value: dt.date) -> int:
-    return int(dt.datetime.combine(value, dt.time.min).timestamp() * 1000)
-
-
-def _add_years(value: dt.date, years: int) -> dt.date:
-    return dt.date(value.year + years, value.month, value.day)
-
-
-def _extract_age(question: str) -> int | None:
-    match = re.search(r"(\d{2,3})\s*岁", question)
-    if not match:
-        return None
-    return int(match.group(1))
-
-
-def _extract_sexual(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return _normalize_sexual(default)
-    if any(keyword in question for keyword in ["女性", "女党员", "女居民", "女"]):
-        return "女"
-    if any(keyword in question for keyword in ["男性", "男党员", "男居民", "男"]):
-        return "男"
-    return None
-
-
-def _extract_marital_status(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return _normalize_marital_status(default)
-    for value in ["未婚", "已婚", "离异", "离婚", "丧偶"]:
-        if value in question:
-            return "离异" if value == "离婚" else value
-    return None
-
-
-def _normalize_sexual(value: str) -> str | None:
-    lowered = value.strip().lower()
-    if lowered in {"female", "woman", "women", "f"}:
-        return "女"
-    if lowered in {"male", "man", "men", "m"}:
-        return "男"
-    if "女" in value:
-        return "女"
-    if "男" in value:
-        return "男"
-    return value or None
-
-
-def _normalize_marital_status(value: str) -> str | None:
-    lowered = value.strip().lower()
-    if lowered in {"unmarried", "single"}:
-        return "未婚"
-    if lowered == "married":
-        return "已婚"
-    if lowered == "divorced":
-        return "离异"
-    if lowered == "widowed":
-        return "丧偶"
-    if "未婚" in value:
-        return "未婚"
-    if "已婚" in value:
-        return "已婚"
-    if "离异" in value or "离婚" in value:
-        return "离异"
-    if "丧偶" in value:
-        return "丧偶"
-    return value or None
-
-
-def _extract_person_name(question: str, intent_id: str) -> str | None:
-    patterns = [
-        r"叫([\u4e00-\u9fa5]{2,4}?)(?=的|居民|吗|[，。？！?]|$)",
-        r"(?:党支部|支部)的([\u4e00-\u9fa5]{2,4}?)(?=党龄|入党|的|[，。？！?]|$)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?=党龄|入党)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?=负责|职责|工作)",
-        r"离职的([\u4e00-\u9fa5]{2,4}?)(?=什么时候|以前|[，。？！?]|$)",
-        r"搬走的([\u4e00-\u9fa5]{2,4}?)(?=原来|以前|住|[，。？！?]|$)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?:大爷|阿姨|老人)?家(?=上次|几口|有没有|[，。？！?]|$)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?=一般都是几点|一般几点|去年的走访|走访数)",
-        r"(?:查看|查询|查一下)?([\u4e00-\u9fa5]{2,4}?)(?=居民全息档案|居民档案|全息档案)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?=历史走访记录|历史走访|走访记录)",
-        r"(?:居民|人员|党员)([\u4e00-\u9fa5]{2,4}?)(?=的|信息|档案|[，。？！?]|$)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?:的)?(?=个人资料|住户资料|居民资料|信息|资料|档案|详情)",
-    ]
-    if intent_id == "employee_position_holder":
-        return None
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if match:
-            return match.group(1)
-    names = [
-        item
-        for item in CHINESE_NAME_RE.findall(question)
-        if item not in {"本社区", "社区", "网格", "党员", "党支部", "居民"}
-    ]
-    return names[0] if names else None
-
-
-def _extract_party_branch(question: str) -> str | None:
-    match = re.search(r"((?:第[一二三四五六七八九十0-9]+|[\u4e00-\u9fa5A-Za-z0-9]+)党支部)", question)
-    return match.group(1) if match else None
-
-
-def _extract_grid_name(question: str) -> str | None:
-    preferred = re.search(r"(第[一二三四五六七八九十0-9]+网格)", question)
-    if preferred:
-        return preferred.group(1)
-    match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{1,12}网格)", question)
-    return match.group(1) if match else None
-
-
-def _extract_address(question: str) -> str | None:
-    patterns = [
-        r"(.+?)(?:下|里|内)?(?:有多少|多少)(?:个)?(?:房间|房屋|房)",
-        r"(.+?)(?:下|里|内)?(?:的)?(?:房间|房屋|房)(?:数量|数)",
-        r"(.+?)(?:是不是|是否)出租房",
-        r"(.+?)(?:归谁管|归哪个网格|属于哪个网格|谁负责)",
-        r"(?:查询|查一下)?(.+?)(?:的)?(?:网格负责人|负责人)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if not match:
-            continue
-        address = _clean_slot_text(match.group(1))
-        if address:
-            return address
-    return None
-
-
-def _extract_role(question: str, intent_id: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return default
-    role_keywords = [
-        "纪委书记",
-        "党支部书记",
-        "书记",
-        "网格员",
-        "社工",
-        "主任",
-        "副主任",
-        "委员",
-    ]
-    for keyword in role_keywords:
-        if keyword in question:
-            if intent_id == "party_branch_secretary":
-                return "书记"
-            return keyword
-    match = re.search(r"(.+?)(?:是谁|有多少人|多少人|一共多少人)", question)
-    if match:
-        role = _clean_slot_text(match.group(1))
-        role = role.replace("社区", "")
-        return role or None
-    return None
-
-
-def _extract_skill(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return default
-    patterns = [
-        r"(会[\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?:的)?志愿者",
-        r"(会[\u4e00-\u9fa5A-Za-z0-9]{1,12}?)(?=的?居民|的?人员|有哪些|名单|$)",
-        r"志愿者.*?(会[\u4e00-\u9fa5A-Za-z0-9]{1,12})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if match:
-            skill = _clean_slot_text(match.group(1))
-            if skill:
-                return skill
-    return None
-
-
-def _extract_tag_name(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return default
-    tags = ["退役军人", "失能老人", "独居老人", "独居老年人", "空巢老人", "残疾人", "高龄老人", "低保", "重点人群"]
-    for tag in tags:
-        if tag in question:
-            return "独居老人" if tag == "独居老年人" else tag
-    match = re.search(r"([\u4e00-\u9fa5]{2,8})(?:标签|群体|人群)", question)
-    if not match:
-        return None
-    tag_name = match.group(1)
-    return None if tag_name in {"标签", "人群", "群体", "特殊"} else tag_name
-
-
-def _extract_merchant_name(question: str) -> str | None:
-    patterns = [
-        r"([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,20}?)(?=的联系人|联系人是谁|的负责人|负责人是谁)",
-        r"(?:商户|店铺)([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,20}?)(?=联系人|负责人)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if match:
-            value = _clean_slot_text(match.group(1))
-            if value and value not in {"商户", "物业公司"}:
-                return value
-    return None
-
-
-def _extract_area_name(question: str) -> str | None:
-    match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]+(?:商业区|片区|小区|园区|街区))", question)
-    return _clean_slot_text(match.group(1)) if match else None
-
-
-def _extract_category(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return default
-    categories = ["餐饮", "洗衣", "物业", "商超", "便利店", "药店"]
-    for category in categories:
-        if category in question:
-            return category
-    return None
-
-
-def _extract_result_limit(question: str, default: int = 10) -> int:
-    match = re.search(r"TOP\s*(\d+)", question, re.IGNORECASE)
-    if match:
-        return max(1, int(match.group(1)))
-    match = re.search(r"前\s*(\d+)", question)
-    if match:
-        return max(1, int(match.group(1)))
-    if "TOP3" in question.upper():
-        return 3
-    return default
-
-
-def _extract_field_name(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return default
-    fields = ["低保", "残疾", "居住状况", "政治面貌", "手机号"]
-    for field_value in fields:
-        if field_value in question:
-            return field_value
-    match = re.search(r"[‘'“\"]([\u4e00-\u9fa5A-Za-z0-9_]+)[’'”\"]字段", question)
-    return match.group(1) if match else None
-
-
-def _clean_slot_text(value: str) -> str:
-    cleaned = value.strip(" \t\r\n，。？！?的“”‘’\"'")
-    for prefix in ["请问", "帮我查", "查询", "查一下", "本社区", "社区"]:
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix) :]
-    return cleaned.strip(" \t\r\n，。？！?的“”‘’\"'")
-
-
-def _like_value(value: str) -> str:
-    return f"%{value}%"
-
-
-def _party_branch_member_path_like(value: str) -> str:
-    branch = _clean_slot_text(value.strip().strip("%")).strip("/")
-    return f"%/{branch}/%" if branch else value
-
-
-def _normalize_party_branch_path_like(value: str) -> str:
-    branch = _clean_slot_text(value.strip().strip("%")).strip("/")
-    return f"%/{branch}/%" if branch else value
-
-
-def _normalize_like_value(value: str) -> str:
-    cleaned = _clean_slot_text(value.strip().strip("%")).rstrip("下里内")
-    return _like_value(cleaned) if cleaned else value
-
-
-def _normalize_compound_building_address(address: str) -> str:
-    cleaned = _clean_slot_text(address)
-    if not cleaned:
-        return cleaned
-    match = re.fullmatch(r"(.+?)([0-9]+)号(?!(?:楼|栋|幢))", cleaned)
-    if match:
-        return f"{match.group(1)}{match.group(2)}号楼"
-    return cleaned
-
-
-def _derive_address_like_slots(slots: dict[str, Any], raw_value: str) -> None:
-    address = _normalize_compound_building_address(
-        _clean_slot_text(raw_value.strip().strip("%")).rstrip("下里内")
-    )
-    if not address:
-        return
-    parsed = parse_room_address(address)
-    if parsed is not None:
-        likes = build_room_name_path_likes(parsed)
-        if likes:
-            slots["address_like"] = _like_value(address)
-            slots["address_segment_like"] = likes[0]
-            if len(likes) > 1:
-                slots["address_alias_segment_like"] = likes[1]
-            if len(likes) > 2:
-                slots["address_second_alias_segment_like"] = likes[2]
-            if len(likes) > 3:
-                slots["address_broad_like"] = likes[3]
-            for area in _community_area_variants_for_slots(parsed.community_area):
-                slots.setdefault("address_area_like", _like_value(area))
-            slots["room_no"] = parsed.room
-            if parsed.building:
-                slots["address_building_name"] = parsed.building
-            return
-    patterns = _address_segment_like_patterns(address)
-    building_names, area_prefix = _address_building_parts(address)
-    slots["address_like"] = _like_value(address)
-    slots["address_segment_like"] = patterns[0]
-    if len(patterns) > 1:
-        slots["address_alias_segment_like"] = patterns[1]
-    if len(patterns) > 2:
-        slots["address_second_alias_segment_like"] = patterns[2]
-    if building_names:
-        slots["address_building_name"] = building_names[0]
-    if len(building_names) > 1:
-        slots["address_building_alias_name"] = building_names[1]
-    if len(building_names) > 2:
-        slots["address_building_second_alias_name"] = building_names[2]
-    if area_prefix:
-        slots["address_area_like"] = _like_value(area_prefix)
-    if _safe_for_broad_address_like(address):
-        slots["address_broad_like"] = _like_value(address)
-
-
-def _community_area_variants_for_slots(area: str) -> list[str]:
-    cleaned = area.strip()
-    if not cleaned:
-        return []
-    variants = [cleaned]
-    if cleaned.startswith("马连道") and len(cleaned) > len("马连道"):
-        variants.append(cleaned[len("马连道") :])
-    return list(dict.fromkeys(item for item in variants if item))
-
-
-def _address_building_parts(address: str) -> tuple[list[str], str | None]:
-    if parse_room_address(address) is not None:
-        return [], None
-    cleaned = _clean_slot_text(address)
-    if match := re.fullmatch(r"([0-9]+(?:号)?(?:楼|栋)?)", cleaned):
-        return _building_name_aliases(match.group(1)), None
-    if match := re.fullmatch(r"(.+?)([0-9]+(?:号)?(?:楼|栋)?)", cleaned):
-        return _building_name_aliases(match.group(2)), _normalize_area_prefix(match.group(1))
-    return [], None
-
-
-def _building_name_aliases(building_text: str) -> list[str]:
-    match = re.match(r"([0-9]+)", building_text)
-    if not match:
-        return [building_text] if building_text else []
-    number = match.group(1)
-    canonical = f"{number}号楼"
-    aliases = [building_text, canonical, number, f"{number}栋"]
-    if building_text.endswith("号") and not building_text.endswith(("号楼", "栋", "幢")):
-        aliases = [canonical, building_text, number, f"{number}栋"]
-    return list(dict.fromkeys(aliases))
-
-
-def _normalize_area_prefix(prefix: str) -> str | None:
-    cleaned = _clean_slot_text(prefix).strip("/")
-    for suffix in ("社区", "小区", "园区"):
-        if cleaned.endswith(suffix) and len(cleaned) > len(suffix):
-            cleaned = cleaned[: -len(suffix)]
-            break
-    return cleaned or None
-
-
-def _address_segment_like_patterns(address: str) -> list[str]:
-    cleaned = _clean_slot_text(address)
-    patterns = [_path_segment_like(cleaned)]
-    if match := re.fullmatch(r"([0-9]+)(?:号)?(?:楼|栋)?", cleaned):
-        number = match.group(1)
-        patterns.extend(_path_segment_like(value) for value in [number, f"{number}号楼", f"{number}栋"])
-    elif match := re.search(r"(.+?)([0-9]+)(?:号)?(?:楼|栋)?$", cleaned):
-        prefix = match.group(1)
-        number = match.group(2)
-        patterns.extend(
-            [
-                _contextual_path_segment_like(prefix, number),
-                _contextual_path_segment_like(prefix, f"{number}号楼"),
-                _contextual_path_segment_like(prefix, f"{number}栋"),
-            ]
-        )
-    return list(dict.fromkeys(item for item in patterns if item))
-
-
-def _path_segment_like(value: str) -> str:
-    return f"%/{value}/%"
-
-
-def _contextual_path_segment_like(prefix: str, value: str) -> str:
-    return f"%/{prefix}%/{value}/%"
-
-
-def _safe_for_broad_address_like(address: str) -> bool:
-    return not re.fullmatch(r"[0-9]+(?:号)?(?:楼|栋)?", address) and len(address) >= 4
-
-
 def _confidence_from_distance(distance: float) -> float:
     return round(max(0.0, min(0.99, 1.0 - distance)), 2)
 
@@ -1479,3 +875,4 @@ def _empty(value: Any) -> bool:
     if isinstance(value, str) and not value.strip():
         return True
     return False
+

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from text2sql_runtime.address_parser import build_room_name_path_likes, parse_room_address
-from text2sql_runtime.business_semantics import _derive_address_like_slots
+from text2sql_runtime.address_slots import derive_address_like_slots
 
 
 def test_parse_room_address_with_dash_separators():
@@ -23,7 +23,7 @@ def test_build_room_name_path_likes_for_full_address():
 
 def test_derive_address_like_slots_uses_room_patterns():
     slots: dict[str, object] = {}
-    _derive_address_like_slots(slots, "马连道中里二区1号楼-1单元-203")
+    derive_address_like_slots(slots, "马连道中里二区1号楼-1单元-203")
     assert slots["address_segment_like"] == "%1号楼%1单元%203%"
     assert slots["room_no"] == "203"
     assert slots["address_building_name"] == "1号楼"
