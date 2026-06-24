@@ -1,0 +1,32 @@
+version: 1
+notes:
+  - Refund order module semantics for text2sql-mvp.
+  - Contains all intents and templates related to refund orders.
+
+entities:
+  RefundOrder:
+    tables: [refund_order]
+
+intents:
+  - id: refund_daily_trend
+    display_name: Refund daily trend
+    status: executable
+    priority: 93
+    match: {all: ["退款"], any: ["趋势", "走势", "折线图", "每日", "近7天", "近七天"]}
+    examples: ["近7天每日退款笔数趋势", "退款笔数折线图"]
+    semantic:
+      queries: ["退款每日趋势", "近一周退款走势", "退款笔数时序图"]
+    ontology_refs: [RefundOrder]
+    physical_tables: [refund_order]
+    output_type: grouped_count
+    template: refund_daily_trend
+
+sql_templates:
+  refund_daily_trend:
+    plan: Daily refund count for the last 7 days.
+    sql: >
+      SELECT DATE(ro.refund_time) AS refund_date, COUNT(*) AS total
+      FROM refund_order ro
+      WHERE ro.refund_time >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)
+      GROUP BY refund_date
+      ORDER BY refund_date

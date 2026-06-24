@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from text2sql_runtime.business_semantics import BusinessSemanticIndex
+from text2sql_runtime.business_semantics import BusinessSemanticIndex, resolve_business_semantics_path
 
 
 def test_payment_order_count_intent(project_root: Path):
-    semantics = BusinessSemanticIndex.from_config(project_root / "configs" / "business_semantics.yaml")
+    semantics = BusinessSemanticIndex.from_config(resolve_business_semantics_path(project_root))
 
     plan = semantics.plan("支付订单总数是多少")
     generated = semantics.compile(plan)
@@ -19,7 +19,7 @@ def test_payment_order_count_intent(project_root: Path):
 
 
 def test_payment_channel_stat_intent(project_root: Path):
-    semantics = BusinessSemanticIndex.from_config(project_root / "configs" / "business_semantics.yaml")
+    semantics = BusinessSemanticIndex.from_config(resolve_business_semantics_path(project_root))
 
     plan = semantics.plan("支付订单按渠道统计")
     generated = semantics.compile(plan)
@@ -31,7 +31,7 @@ def test_payment_channel_stat_intent(project_root: Path):
 
 
 def test_unconfigured_intent_is_needs_mapping(project_root: Path):
-    semantics = BusinessSemanticIndex.from_config(project_root / "configs" / "business_semantics.yaml")
+    semantics = BusinessSemanticIndex.from_config(resolve_business_semantics_path(project_root))
 
     plan = semantics.plan("请统计火星基地飞船泊位能耗")
 
@@ -45,7 +45,7 @@ def test_fast_path_skips_llm_for_example_matched_payment_question(project_root: 
             raise AssertionError("LLM slot extractor should not run on fast path")
 
     semantics = BusinessSemanticIndex.from_config(
-        project_root / "configs" / "business_semantics.yaml",
+        resolve_business_semantics_path(project_root),
         slot_extractor=FailingSlotExtractor(),  # type: ignore[arg-type]
     )
 

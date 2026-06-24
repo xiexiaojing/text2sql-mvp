@@ -119,10 +119,23 @@ class EntityColumnLabelIndex:
 
     @classmethod
     def from_business_semantics_path(cls, path: Path) -> EntityColumnLabelIndex:
+        """Load entity_query_schemas from a YAML file or a directory of YAML files."""
         if not path.exists():
             return cls({})
-        raw = load_yaml(path)
-        return cls.from_entity_query_schemas(raw.get("entity_query_schemas"))
+
+        if path.is_file():
+            raw = load_yaml(path)
+            return cls.from_entity_query_schemas(raw.get("entity_query_schemas"))
+
+        if path.is_dir():
+            merged_schemas: dict[str, Any] = {}
+            for yaml_file in sorted(path.glob("*.yaml")):
+                raw = load_yaml(yaml_file)
+                if "entity_query_schemas" in raw:
+                    merged_schemas.update(raw["entity_query_schemas"])
+            return cls.from_entity_query_schemas(merged_schemas if merged_schemas else None)
+
+        return cls({})
 
     def get(self, column: str) -> str | None:
         return self._alias_labels.get(column.lower())

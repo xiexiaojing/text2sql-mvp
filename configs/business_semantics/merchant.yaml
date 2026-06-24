@@ -1,0 +1,54 @@
+version: 1
+notes:
+  - Merchant module semantics for text2sql-mvp.
+  - Contains all intents and templates related to merchants.
+
+entities:
+  Merchant:
+    tables: [merchant]
+
+intents:
+  - id: merchant_count
+    display_name: Merchant count
+    status: executable
+    priority: 90
+    match: {any: ["商户总数", "商户有多少", "商家数量", "有多少商户"]}
+    examples: ["商户总数是多少"]
+    semantic:
+      queries: ["商户数量", "统计商户总数"]
+    ontology_refs: [Merchant]
+    physical_tables: [merchant]
+    output_type: scalar_count
+    template: merchant_count
+
+  - id: merchant_payment_rank
+    display_name: Merchant payment rank
+    status: executable
+    priority: 91
+    match: {all: ["商户"], any: ["排名", "排行", "TOP", "top"]}
+    examples: ["商户交易金额排名", "商户交易金额TOP10"]
+    semantic:
+      queries: ["商户交易额排名", "按交易金额排序商户"]
+    ontology_refs: [Merchant, PaymentOrder]
+    optional_slots: [result_limit]
+    physical_tables: [merchant, payment_order]
+    output_type: grouped_metric
+    template: merchant_payment_rank
+    slot_defaults: {result_limit: 10}
+
+sql_templates:
+  merchant_count:
+    plan: Count merchants for the current tenant.
+    sql: >
+      SELECT COUNT(*) AS total FROM merchant m
+
+  merchant_payment_rank:
+    plan: Rank merchants by total payment amount.
+    params: {result_limit: result_limit}
+    sql: >
+      SELECT m.name AS merchant_name, SUM(po.amount) AS total
+      FROM merchant m
+      JOIN payment_order po ON po.merchant_id = m.id
+      GROUP BY m.id, m.name
+      ORDER BY total DESC
+      LIMIT %(result_limit)s

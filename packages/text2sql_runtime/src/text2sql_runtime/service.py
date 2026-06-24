@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit import SQLiteAuditStore
-from .business_semantics import BusinessSemanticIndex, SemanticPlan
+from .business_semantics import BusinessSemanticIndex, SemanticPlan, resolve_business_semantics_path
 from .config import IntentRoutingSettings, RuntimeSettings, load_settings
 from .context import SchemaContextBuilder
 from .conversation import contextualize_question
@@ -53,7 +53,7 @@ class Text2SqlService:
         self.catalog = catalog
         self.semantics = semantics
         self.business_semantics = business_semantics or BusinessSemanticIndex.from_config(
-            settings.project_root / "configs" / "business_semantics.yaml",
+            resolve_business_semantics_path(settings.project_root),
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
             routing_settings=IntentRoutingSettings.from_performance(settings.performance),
@@ -91,7 +91,7 @@ class Text2SqlService:
         self.audit_store = audit_store or SQLiteAuditStore(settings.audit_db_path)
         self.memory_store = memory_store or SQLiteMemoryStore(settings.audit_db_path)
         entity_labels = EntityColumnLabelIndex.from_business_semantics_path(
-            settings.project_root / "configs" / "business_semantics.yaml",
+            resolve_business_semantics_path(settings.project_root),
         )
         self.formatter = ResultFormatter(catalog, entity_labels)
 
@@ -101,7 +101,7 @@ class Text2SqlService:
         catalog = SchemaCatalog.from_whitelist(settings.project_root / "configs" / "whitelist_tables.yaml")
         semantics = SemanticIndex.from_config(settings.project_root / "configs" / "semantic_overrides.yaml")
         business_semantics = BusinessSemanticIndex.from_config(
-            settings.project_root / "configs" / "business_semantics.yaml",
+            resolve_business_semantics_path(settings.project_root),
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
             routing_settings=IntentRoutingSettings.from_performance(settings.performance),

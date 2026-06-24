@@ -1,0 +1,131 @@
+version: 1
+notes:
+  - Payment order module semantics for text2sql-mvp.
+  - Contains all intents and templates related to payment orders.
+
+entities:
+  PaymentOrder:
+    tables: [payment_order]
+
+intents:
+  - id: payment_order_count
+    display_name: Payment order count
+    status: executable
+    priority: 95
+    match: {all: ["订单"], any: ["总数", "有多少", "数量", "多少", "几笔", "笔数"]}
+    examples: ["支付订单总数是多少", "有多少笔支付订单"]
+    semantic:
+      queries: ["支付订单数量", "统计支付订单总数", "订单笔数"]
+    ontology_refs: [PaymentOrder]
+    physical_tables: [payment_order]
+    output_type: scalar_count
+    template: payment_order_count
+
+  - id: payment_channel_stat
+    display_name: Payment channel distribution
+    status: executable
+    priority: 96
+    match: {all: ["订单"], any: ["按渠道", "渠道统计", "渠道分布", "渠道"]}
+    examples: ["支付订单按渠道统计", "各支付渠道订单数量"]
+    semantic:
+      queries: ["支付渠道分布", "按渠道统计订单", "各渠道订单数"]
+    ontology_refs: [PaymentOrder]
+    physical_tables: [payment_order]
+    output_type: grouped_count
+    template: payment_channel_stat
+
+  - id: payment_status_stat
+    display_name: Payment status distribution
+    status: executable
+    priority: 92
+    match: {all: ["订单"], any: ["按状态", "状态统计", "状态分布"]}
+    examples: ["支付订单按状态统计"]
+    semantic:
+      queries: ["订单状态分布", "按状态统计支付订单"]
+    ontology_refs: [PaymentOrder]
+    physical_tables: [payment_order]
+    output_type: grouped_count
+    template: payment_status_stat
+
+  - id: payment_channel_amount_distribution
+    display_name: Payment channel amount distribution
+    status: executable
+    priority: 94
+    match: {any: ["支付渠道", "渠道金额", "交易金额分布", "渠道交易金额"]}
+    examples: ["各支付渠道交易金额分布", "生成一份支付渠道金额分布饼图"]
+    semantic:
+      queries: ["支付渠道金额占比", "各渠道交易金额分布图", "渠道金额饼图"]
+    ontology_refs: [PaymentOrder]
+    physical_tables: [payment_order]
+    output_type: grouped_metric
+    template: payment_channel_amount_distribution
+
+  - id: payment_phone_lookup
+    display_name: Payment phone lookup
+    status: executable
+    priority: 97
+    match: {all: ["手机"], any: ["订单", "支付"]}
+    examples: ["按手机号查询支付订单", "有手机号13800138000的订单吗"]
+    semantic:
+      queries: ["手机号查订单", "按付款手机号查询"]
+    ontology_refs: [PaymentOrder]
+    required_slots: [phone]
+    physical_tables: [payment_order]
+    output_type: scalar_count
+    template: payment_phone_lookup
+
+  - id: payment_sensitive_fields
+    display_name: Payment sensitive fields
+    status: executable
+    priority: 98
+    match: {any: ["付款手机号", "payer_mobile", "查询付款手机"]}
+    examples: ["查询支付订单付款手机号"]
+    semantic:
+      queries: ["返回订单付款手机号字段", "查看 payer mobile"]
+    ontology_refs: [PaymentOrder]
+    physical_tables: [payment_order]
+    output_type: list
+    template: payment_sensitive_fields
+
+sql_templates:
+  payment_order_count:
+    plan: Count payment orders for the current tenant.
+    sql: >
+      SELECT COUNT(*) AS total FROM payment_order po
+
+  payment_channel_stat:
+    plan: Group payment orders by channel.
+    sql: >
+      SELECT po.channel AS channel_value, COUNT(*) AS total
+      FROM payment_order po
+      GROUP BY po.channel
+      ORDER BY total DESC
+
+  payment_status_stat:
+    plan: Group payment orders by status.
+    sql: >
+      SELECT po.status AS status_value, COUNT(*) AS total
+      FROM payment_order po
+      GROUP BY po.status
+      ORDER BY total DESC
+
+  payment_channel_amount_distribution:
+    plan: Sum payment amount by channel for chart visualization.
+    sql: >
+      SELECT po.channel AS channel_value, SUM(po.amount) AS total
+      FROM payment_order po
+      GROUP BY po.channel
+      ORDER BY total DESC
+
+  payment_phone_lookup:
+    plan: Match payer mobile on payment orders without embedding the phone in SQL text.
+    params: {phone: phone}
+    sql: >
+      SELECT COUNT(*) AS total
+      FROM payment_order po
+      WHERE po.payer_mobile = %(phone)s
+
+  payment_sensitive_fields:
+    plan: Return payer mobile column (requires allow_sensitive_fields at runtime).
+    sql: >
+      SELECT po.id, po.payer_mobile FROM payment_order po
