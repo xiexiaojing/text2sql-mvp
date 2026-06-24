@@ -63,6 +63,9 @@ def _date_to_epoch_ms(date_val: dt.date) -> int:
     """
     return int((dt.datetime.combine(date_val, dt.time.min) - _EPOCH).total_seconds() * 1000)
 
+def is_set_epoch_ms_sql(column: str) -> str:
+    return f"({column} IS NOT NULL AND {column} <> 0)"
+
 
 def epoch_ms_for_age_at_least(age: int, today: dt.date | None = None) -> int:
     current = today or dt.date.today()
@@ -77,6 +80,12 @@ def month_start_epoch_ms(today: dt.date | None = None) -> int:
     current = today or dt.date.today()
     start = dt.date(current.year, current.month, 1)
     return _date_to_epoch_ms(start)
+
+
+def year_start_epoch_ms(today: dt.date | None = None) -> int:
+    current = today or dt.date.today()
+    start = dt.date(current.year, 1, 1)
+    return int(dt.datetime.combine(start, dt.time.min).timestamp() * 1000)
 
 
 def month_end_epoch_ms(today: dt.date | None = None) -> int:

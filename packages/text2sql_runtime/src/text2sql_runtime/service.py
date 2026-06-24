@@ -4,21 +4,24 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from .audit import SQLiteAuditStore
 from .business_semantics import BusinessSemanticIndex, SemanticPlan
-from .config import RuntimeSettings, load_settings
+from .config import IntentRoutingSettings, RuntimeSettings, load_settings
 from .context import SchemaContextBuilder
 from .conversation import contextualize_question
 from .executor import SqlExecutor, build_executor
+from .field_encryption import encrypt_sensitive_query_params
 from .field_explanation import explain_field, resolve_field
 from .column_labels import EntityColumnLabelIndex
-from .formatter import ResultFormatter, _answer_grid_building_list
+from .formatter import ResultFormatter
 from .generator import OpenAICompatibleSqlGenerator, SchemaDrivenSqlGenerator
-from .models import EstimateResult, ExecutionResult, GeneratedSql, QueryInput, QueryResult, RejectedQuery
-from .sql_guard import GuardResult
+from .memory import MemoryRecord, SQLiteMemoryStore
+from .models import EstimateResult, ExecutionResult, QueryInput, QueryResult, RejectedQuery
 from .router import QueryRouter
 from .schema import SchemaCatalog
+from .semantic_enrichment import SemanticEnrichmentIndex
 from .semantics import SemanticIndex
 from .sql_guard import SqlGuard
 from .sql_policy import ensure_limit, inject_domain_filter
@@ -26,98 +29,13 @@ from .visualization import append_echarts_fence, maybe_build_chart, maybe_build_
 
 _EXECUTABLE_STATUSES = frozenset({"executable", "guarded_text2sql", "metadata"})
 
-_SELF_SCOPED_INTENTS = frozenset(
-    {
-        "visiting_pending_household_count",
-        "visiting_pending_tasks_list",
-        "visiting_self_rank",
-        "visiting_colleague",
-    }
-)
-
 
 def _apply_query_actor(plan: SemanticPlan, query_input: QueryInput, question: str) -> SemanticPlan:
-    from dataclasses import replace
-
-    needs_user = "我" in question or plan.intent in _SELF_SCOPED_INTENTS
-    if not needs_user:
+    if not query_input.user_id or "我" not in question:
         return plan
-    if query_input.user_id:
-        slots = dict(plan.slots)
-        slots["current_user_id"] = query_input.user_id
-        missing = [slot for slot in plan.missing_slots if slot != "current_user_id"]
-        status = plan.status
-        reason = plan.reason
-        if status == "needs_clarification" and not missing:
-            status = "executable"
-            reason = None
-        return replace(plan, slots=slots, missing_slots=missing, status=status, reason=reason)
-    if "我" in question or plan.intent in {
-        "visiting_pending_household_count",
-        "visiting_colleague",
-        "visiting_self_rank",
-    }:
-        return replace(
-            plan,
-            status="needs_clarification",
-            reason="请登录后再查询与「我」相关的走访任务。",
-            template_id=None,
-        )
-    return plan
-
-
-_COMPOUND_INTENT_TEMPLATES: dict[str, list[str]] = {
-    "responsible_elderly_list": ["responsible_elderly_list", "responsible_elderly_list_member"],
-}
-
-
-def _merge_responsible_elderly_rows(row_sets: list[list[dict]]) -> list[dict]:
-    merged: dict[str, dict] = {}
-    for rows in row_sets:
-        for row in rows:
-            row_id = str(row.get("id") or "")
-            if not row_id:
-                continue
-            if row_id not in merged:
-                merged[row_id] = dict(row)
-                continue
-            existing = merged[row_id]
-            roles = {
-                str(existing.get("responsibility_role") or "").strip(),
-                str(row.get("responsibility_role") or "").strip(),
-            }
-            roles.discard("")
-            if len(roles) > 1:
-                existing["responsibility_role"] = "网格管理员/成员"
-            grid_names = {
-                str(existing.get("grid_name") or "").strip(),
-                str(row.get("grid_name") or "").strip(),
-            }
-            grid_names.discard("")
-            if len(grid_names) > 1:
-                existing["grid_name"] = "、".join(sorted(grid_names))
-    return sorted(merged.values(), key=lambda item: str(item.get("name") or ""))
-
-
-def _answer_visiting_self_rank(rows: list[dict], current_user_id: str | None) -> str:
-    if not current_user_id:
-        return "请登录后再查询与「我」相关的走访任务。"
-    if not rows:
-        return "暂无走访排名数据。"
-    ranked = sorted(
-        rows,
-        key=lambda row: (-int(row.get("total") or 0), str(row.get("visit_person_id") or "")),
-    )
-    rank = 1
-    for index, row in enumerate(ranked):
-        if index > 0 and int(row.get("total") or 0) < int(ranked[index - 1].get("total") or 0):
-            rank = index + 1
-        if str(row.get("visit_person_id") or "") == current_user_id:
-            total = int(row.get("total") or 0)
-            if total <= 0:
-                return "您暂无走访记录，尚未进入排名。"
-            return f"您的走访量排在第 {rank} 名（共 {total} 次）。"
-    return "未找到您的走访记录，尚未进入排名。"
+    slots = dict(plan.slots)
+    slots["current_user_id"] = query_input.user_id
+    return replace(plan, slots=slots)
 
 
 class Text2SqlService:
@@ -129,6 +47,7 @@ class Text2SqlService:
         business_semantics: BusinessSemanticIndex | None = None,
         executor: SqlExecutor | None = None,
         audit_store: SQLiteAuditStore | None = None,
+        memory_store: SQLiteMemoryStore | None = None,
     ) -> None:
         self.settings = settings
         self.catalog = catalog
@@ -137,6 +56,8 @@ class Text2SqlService:
             settings.project_root / "configs" / "business_semantics.yaml",
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
+            routing_settings=IntentRoutingSettings.from_performance(settings.performance),
+            field_encryption=settings.field_encryption,
         )
         self.router = QueryRouter(
             catalog,
@@ -144,10 +65,14 @@ class Text2SqlService:
             settings.performance,
             allow_sensitive_fields=settings.allow_sensitive_fields,
         )
+        self.enrichment = SemanticEnrichmentIndex.from_config(
+            settings.project_root / "configs" / "entity_enrichment.yaml",
+        )
         self.context_builder = SchemaContextBuilder(
             catalog,
             semantics,
             allow_sensitive_fields=settings.allow_sensitive_fields,
+            enrichment=self.enrichment,
         )
         fallback = SchemaDrivenSqlGenerator(
             catalog,
@@ -164,6 +89,7 @@ class Text2SqlService:
         )
         self.executor = executor or build_executor(settings)
         self.audit_store = audit_store or SQLiteAuditStore(settings.audit_db_path)
+        self.memory_store = memory_store or SQLiteMemoryStore(settings.audit_db_path)
         entity_labels = EntityColumnLabelIndex.from_business_semantics_path(
             settings.project_root / "configs" / "business_semantics.yaml",
         )
@@ -178,6 +104,8 @@ class Text2SqlService:
             settings.project_root / "configs" / "business_semantics.yaml",
             vector_settings=settings.intent_vector,
             llm_settings=settings.llm,
+            routing_settings=IntentRoutingSettings.from_performance(settings.performance),
+            field_encryption=settings.field_encryption,
         )
         return cls(
             settings=settings,
@@ -251,6 +179,7 @@ class Text2SqlService:
         warnings: list[str] = []
         interaction_logs: list[dict[str, object]] = []
         semantic_plan: SemanticPlan | None = None
+        applied_memories: list[MemoryRecord] = []
         try:
             effective_question, conversation_log = contextualize_question(
                 query_input.question,
@@ -258,6 +187,13 @@ class Text2SqlService:
             )
             if conversation_log:
                 interaction_logs.append(conversation_log)
+            applied_memories = self._retrieve_memories(
+                effective_question,
+                domain_id=query_input.domain_id,
+                user_id=query_input.user_id,
+            )
+            if applied_memories:
+                interaction_logs.append(self._memory_log(applied_memories))
             semantic_plan = self.business_semantics.plan(effective_question, query_input.history)
             semantic_plan = _apply_query_actor(semantic_plan, query_input, effective_question)
             interaction_logs.append(self._semantic_log(semantic_plan))
@@ -278,10 +214,11 @@ class Text2SqlService:
                     semantic_plan.slots,
                     self.catalog,
                     self.settings.project_root,
+                    enrichment=self.enrichment,
                 )
                 if resolved is None:
                     raise RejectedQuery(
-                        "未在白名单 schema 中找到该字段，请改用物理字段名如 resident.residence_status。",
+                        "未在白名单 schema 中找到该字段，请改用物理字段名如 payment_order.status。",
                         "field_not_found",
                     )
                 answer, table = explain_field(resolved)
@@ -298,6 +235,7 @@ class Text2SqlService:
                     warnings=warnings,
                     interaction_logs=interaction_logs,
                     semantic_plan=semantic_plan.to_dict(),
+                    applied_memories=self._memory_payload(applied_memories),
                 )
                 self._audit(query_id, query_input, result, None, 0)
                 return result
@@ -318,6 +256,7 @@ class Text2SqlService:
                     effective_question,
                     estimate.candidate_tables,
                     query_input.history,
+                    memories=applied_memories,
                 )
                 generator = (
                     self.generator
@@ -330,66 +269,44 @@ class Text2SqlService:
                     estimate.candidate_tables,
                 )
             else:
-                if semantic_plan.intent in _COMPOUND_INTENT_TEMPLATES:
-                    generated = GeneratedSql(
-                        sql="",
-                        plan="compound semantic query",
-                        hit_path="semantic_template",
-                        params={},
-                        interaction_logs=[],
-                    )
-                else:
-                    generated = self.business_semantics.compile(semantic_plan)
+                generated = self.business_semantics.compile(semantic_plan)
             interaction_logs.extend(generated.interaction_logs)
 
             limits = self.settings.performance.get("limits", {})
             default_limit = int(limits.get("default_detail_limit", 200))
             max_limit = int(query_input.max_rows or limits.get("max_detail_limit", 1000))
             scanned_rows = 0
-            if semantic_plan.intent in _COMPOUND_INTENT_TEMPLATES:
-                execution, guard_result, generated, scanned_rows = self._execute_compound_semantic_query(
-                    semantic_plan,
-                    query_input.domain_id,
-                    default_limit,
-                    max_limit,
-                )
-                interaction_logs.extend(generated.interaction_logs)
-                sql_for_audit = guard_result.sql
-            else:
-                sql_with_domain, domain_params = inject_domain_filter(
-                    generated.sql,
-                    self.catalog,
-                    query_input.domain_id,
-                )
-                params = {**generated.params, **domain_params}
-                guarded_sql = ensure_limit(sql_with_domain, default_limit, max_limit)
-                guard_result = self.guard.validate(guarded_sql)
-                sql_for_audit = guard_result.sql
-                warnings.extend(guard_result.warnings)
+            execution_params: dict[str, Any] | None = None
+            sql_with_domain, domain_params = inject_domain_filter(
+                generated.sql,
+                self.catalog,
+                query_input.domain_id,
+            )
+            params = {**generated.params, **domain_params}
+            params = encrypt_sensitive_query_params(
+                params,
+                intent_id=semantic_plan.intent or "",
+                settings=self.settings.field_encryption,
+            )
+            execution_params = dict(params)
+            guarded_sql = ensure_limit(sql_with_domain, default_limit, max_limit)
+            guard_result = self.guard.validate(guarded_sql)
+            sql_for_audit = guard_result.sql
+            warnings.extend(guard_result.warnings)
 
-                self.router.reject_if_sql_too_complex(guard_result.tables)
-                explain, scanned_rows = self.executor.explain(guard_result.sql, params)
-                self.router.reject_if_explain_too_large(scanned_rows)
-                execution = self.executor.execute(guard_result.sql, params, max_limit)
-                if semantic_plan.intent == "grid_building_list":
-                    execution, guard_result, sql_for_audit = self._finalize_grid_building_list_execution(
-                        semantic_plan,
-                        query_input.domain_id,
-                        execution,
-                        guard_result,
-                        sql_for_audit,
-                        default_limit,
-                        max_limit,
-                    )
-                if not execution.explain:
-                    execution = type(execution)(
-                        columns=execution.columns,
-                        rows=execution.rows,
-                        explain=explain,
-                        elapsed_ms=execution.elapsed_ms,
-                        scanned_rows=scanned_rows,
-                        mode=execution.mode,
-                    )
+            self.router.reject_if_sql_too_complex(guard_result.tables)
+            explain, scanned_rows = self.executor.explain(guard_result.sql, params)
+            self.router.reject_if_explain_too_large(scanned_rows)
+            execution = self.executor.execute(guard_result.sql, params, max_limit)
+            if not execution.explain:
+                execution = type(execution)(
+                    columns=execution.columns,
+                    rows=execution.rows,
+                    explain=explain,
+                    elapsed_ms=execution.elapsed_ms,
+                    scanned_rows=scanned_rows,
+                    mode=execution.mode,
+                )
             answer, table = self.formatter.format(
                 execution,
                 guard_result.sql,
@@ -399,36 +316,6 @@ class Text2SqlService:
                 display_name=semantic_plan.display_name,
                 output_type=semantic_plan.output_type,
             )
-            if semantic_plan.intent == "visiting_self_rank":
-                answer = _answer_visiting_self_rank(
-                    execution.rows,
-                    semantic_plan.slots.get("current_user_id"),
-                )
-            elif semantic_plan.intent == "grid_building_list" and execution.rows:
-                answer = _answer_grid_building_list(execution.rows)
-            elif semantic_plan.intent == "grid_building_list" and not execution.rows:
-                grid_label = str(semantic_plan.slots.get("grid_name") or "该网格")
-                if execution.mode == "dry_run":
-                    answer = f"未找到「{grid_label}」下的楼栋列表。"
-                else:
-                    matched = self._lookup_grid_names(
-                        query_input.domain_id,
-                        str(semantic_plan.slots.get("grid_name") or ""),
-                        str(semantic_plan.slots.get("grid_name_like") or f"%{grid_label}%"),
-                    )
-                    if matched:
-                        answer = (
-                            f"已找到网格「{'、'.join(matched)}」，但该网格暂未关联网格内楼栋，"
-                            "请在网格管理中维护房屋范围后再查询。"
-                        )
-                    else:
-                        answer = f"未找到名为「{grid_label}」的网格，请确认网格名称是否正确。"
-            elif semantic_plan.intent == "grid_party_member_distribution" and not execution.rows:
-                grid_label = str(semantic_plan.slots.get("grid_name") or "该网格")
-                answer = (
-                    f"「{grid_label}」下尚未关联房屋节点，或该网格暂无登记党员，"
-                    "无法生成楼栋分布热力图。"
-                )
             echarts_option = None
             chart_answer, chart_option = maybe_build_chart(
                 semantic_plan.intent,
@@ -461,6 +348,9 @@ class Text2SqlService:
                 interaction_logs=interaction_logs,
                 semantic_plan=semantic_plan.to_dict(),
                 echarts_option=echarts_option,
+                execution_rows=[dict(row) for row in execution.rows],
+                execution_params=execution_params,
+                applied_memories=self._memory_payload(applied_memories),
             )
             self._audit(query_id, query_input, result, sql_for_audit, scanned_rows)
             return result
@@ -478,6 +368,7 @@ class Text2SqlService:
                 warnings=warnings,
                 interaction_logs=interaction_logs,
                 semantic_plan=semantic_plan.to_dict() if semantic_plan else None,
+                applied_memories=self._memory_payload(applied_memories),
             )
             self._audit(query_id, query_input, result, sql_for_audit, 0)
             return result
@@ -495,6 +386,7 @@ class Text2SqlService:
                 warnings=warnings,
                 interaction_logs=interaction_logs,
                 semantic_plan=semantic_plan.to_dict() if semantic_plan else None,
+                applied_memories=self._memory_payload(applied_memories),
             )
             self._audit(query_id, query_input, result, sql_for_audit, 0)
             return result
@@ -517,6 +409,126 @@ class Text2SqlService:
         summary["business_intents"] = self.business_semantics.summary()
         return summary
 
+    def confirm_memory(
+        self,
+        *,
+        content: str,
+        scope: str,
+        kind: str = "correction",
+        title: str | None = None,
+        domain_id: str | None = None,
+        user_id: str | None = None,
+        keywords: list[str] | None = None,
+        source_query_id: str | None = None,
+        confirmed_by: str | None = None,
+        replace_memory_ids: list[str] | None = None,
+        allow_conflict: bool = False,
+    ) -> dict[str, Any]:
+        duplicate, conflicts, _ = self.memory_store.prepare_create(
+            content=content,
+            scope=scope,
+            kind=kind,
+            title=title,
+            domain_id=domain_id,
+            user_id=user_id,
+            keywords=keywords,
+        )
+        if duplicate is not None:
+            return {
+                "status": "exists",
+                "memory": duplicate.to_dict(),
+                "conflicts": [],
+                "replacedMemoryIds": [],
+            }
+        if conflicts and not allow_conflict and not replace_memory_ids:
+            return {
+                "status": "conflict",
+                "memory": None,
+                "conflicts": [item.to_dict() for item in conflicts],
+                "replacedMemoryIds": [],
+            }
+        record = self.memory_store.create(
+            content=content,
+            scope=scope,
+            kind=kind,
+            title=title,
+            domain_id=domain_id,
+            user_id=user_id,
+            keywords=keywords,
+            source_query_id=source_query_id,
+            confirmed_by=confirmed_by,
+            replace_memory_ids=replace_memory_ids,
+            allow_conflict=allow_conflict,
+        )
+        return {
+            "status": "created",
+            "memory": record.to_dict(),
+            "conflicts": [item.to_dict() for item in conflicts],
+            "replacedMemoryIds": list(replace_memory_ids or []),
+        }
+
+    def list_memories(
+        self,
+        *,
+        domain_id: str | None = None,
+        user_id: str | None = None,
+        scope: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        items = self.memory_store.list_memories(
+            domain_id=domain_id,
+            user_id=user_id,
+            scope=scope,
+            limit=limit,
+        )
+        return {
+            "items": [item.to_dict() for item in items],
+            "count": len(items),
+        }
+
+    def deactivate_memory(self, memory_id: str) -> bool:
+        return self.memory_store.deactivate(memory_id)
+
+    def _memory_top_k(self) -> int:
+        memory_settings = self.settings.performance.get("memory")
+        if not isinstance(memory_settings, dict):
+            return 3
+        return max(1, min(int(memory_settings.get("top_k", 3)), 10))
+
+    def _retrieve_memories(
+        self,
+        question: str,
+        *,
+        domain_id: str | None,
+        user_id: str | None,
+    ) -> list[MemoryRecord]:
+        memory_settings = self.settings.performance.get("memory")
+        min_score = 1.0
+        if isinstance(memory_settings, dict) and memory_settings.get("min_score") is not None:
+            min_score = float(memory_settings["min_score"])
+        return self.memory_store.retrieve(
+            question=question,
+            domain_id=domain_id,
+            user_id=user_id,
+            limit=self._memory_top_k(),
+            min_score=min_score,
+        )
+
+    @staticmethod
+    def _memory_payload(memories: list[MemoryRecord]) -> list[dict[str, Any]] | None:
+        if not memories:
+            return None
+        return [item.to_dict() for item in memories]
+
+    @staticmethod
+    def _memory_log(memories: list[MemoryRecord]) -> dict[str, Any]:
+        return {
+            "kind": "memory",
+            "status": "applied",
+            "count": len(memories),
+            "items": [item.to_dict() for item in memories],
+        }
+
     def _should_use_llm(self, estimate: EstimateResult, *, force_llm: bool = False) -> bool:
         if not self.settings.llm.configured:
             return False
@@ -528,87 +540,6 @@ class Text2SqlService:
         if policy == "always":
             return True
         return estimate.hit_path == "guarded_text2sql" and len(estimate.candidate_tables) > 1
-
-    def _finalize_grid_building_list_execution(
-        self,
-        plan: SemanticPlan,
-        domain_id: str,
-        execution: ExecutionResult,
-        guard_result: GuardResult,
-        sql_for_audit: str,
-        default_limit: int,
-        max_limit: int,
-    ) -> tuple[ExecutionResult, GuardResult, str]:
-        rows = list(execution.rows)
-        if rows:
-            level3_rows = [row for row in rows if row.get("node_level") == 3]
-            if level3_rows:
-                rows = level3_rows
-            return self._grid_building_list_execution(rows, execution), guard_result, sql_for_audit
-
-        if execution.mode == "dry_run":
-            return self._grid_building_list_execution(rows, execution), guard_result, sql_for_audit
-
-        fallback_plan = replace(plan, template_id="grid_building_list_house_fallback")
-        generated = self.business_semantics.compile(fallback_plan)
-        sql_with_domain, domain_params = inject_domain_filter(
-            generated.sql,
-            self.catalog,
-            domain_id,
-        )
-        params = {**generated.params, **domain_params}
-        guarded_sql = ensure_limit(sql_with_domain, default_limit, max_limit)
-        fallback_guard = self.guard.validate(guarded_sql)
-        self.router.reject_if_sql_too_complex(fallback_guard.tables)
-        fallback_execution = self.executor.execute(fallback_guard.sql, params, max_limit)
-        return (
-            self._grid_building_list_execution(fallback_execution.rows, fallback_execution),
-            fallback_guard,
-            fallback_guard.sql,
-        )
-
-    def _grid_building_list_execution(
-        self,
-        rows: list[dict[str, object]],
-        execution: ExecutionResult,
-    ) -> ExecutionResult:
-        cleaned_rows = [
-            {key: value for key, value in row.items() if key != "node_level"}
-            for row in rows
-        ]
-        columns = [column for column in execution.columns if column != "node_level"]
-        return type(execution)(
-            columns=columns,
-            rows=cleaned_rows,
-            explain=execution.explain,
-            elapsed_ms=execution.elapsed_ms,
-            scanned_rows=execution.scanned_rows,
-            mode=execution.mode,
-        )
-
-    def _lookup_grid_names(self, domain_id: str, grid_name: str, grid_name_like: str) -> list[str]:
-        sql = """
-        SELECT name
-        FROM community_grid
-        WHERE domain_id = %(domain_id)s
-          AND (name = %(grid_name)s OR name LIKE %(grid_name_like)s)
-        ORDER BY name
-        LIMIT 5
-        """
-        params = {
-            "domain_id": domain_id,
-            "grid_name": grid_name,
-            "grid_name_like": grid_name_like or f"%{grid_name}%",
-        }
-        try:
-            execution = self.executor.execute(sql, params, max_rows=5)
-        except Exception:
-            return []
-        return [
-            str(row.get("name") or "").strip()
-            for row in execution.rows
-            if str(row.get("name") or "").strip()
-        ]
 
     def _audit(
         self,
@@ -656,67 +587,6 @@ class Text2SqlService:
             "slotSource": semantic_plan.slot_source,
             "slotElapsedMs": semantic_plan.slot_elapsed_ms,
         }
-
-    def _execute_compound_semantic_query(
-        self,
-        semantic_plan: SemanticPlan,
-        domain_id: str,
-        default_limit: int,
-        max_limit: int,
-    ) -> tuple[ExecutionResult, GuardResult, GeneratedSql, int]:
-        template_ids = _COMPOUND_INTENT_TEMPLATES[semantic_plan.intent]
-        row_sets: list[list[dict]] = []
-        columns: list[str] = []
-        explain_rows: list[dict] = []
-        scanned_rows = 0
-        elapsed_ms = 0
-        mode = "dry_run"
-        interaction_logs: list[dict[str, object]] = []
-        guarded_sql_parts: list[str] = []
-
-        for template_id in template_ids:
-            generated = self.business_semantics.compile(replace(semantic_plan, template_id=template_id))
-            interaction_logs.extend(generated.interaction_logs)
-            sql_with_domain, domain_params = inject_domain_filter(
-                generated.sql,
-                self.catalog,
-                domain_id,
-            )
-            params = {**generated.params, **domain_params}
-            guarded_sql = ensure_limit(sql_with_domain, default_limit, max_limit)
-            guard_result = self.guard.validate(guarded_sql)
-            guarded_sql_parts.append(guard_result.sql)
-            self.router.reject_if_sql_too_complex(guard_result.tables)
-            explain, part_scanned_rows = self.executor.explain(guard_result.sql, params)
-            scanned_rows += part_scanned_rows
-            explain_rows.extend(explain)
-            part_execution = self.executor.execute(guard_result.sql, params, max_limit)
-            elapsed_ms += part_execution.elapsed_ms
-            mode = part_execution.mode
-            if part_execution.columns and not columns:
-                columns = list(part_execution.columns)
-            row_sets.append(list(part_execution.rows))
-
-        self.router.reject_if_explain_too_large(scanned_rows)
-        merged_rows = _merge_responsible_elderly_rows(row_sets)
-        execution = ExecutionResult(
-            columns=columns,
-            rows=merged_rows,
-            explain=explain_rows,
-            elapsed_ms=elapsed_ms,
-            scanned_rows=scanned_rows,
-            mode=mode,
-        )
-        combined_sql = " UNION ".join(guarded_sql_parts)
-        combined_guard = GuardResult(sql=combined_sql, tables=[], warnings=[])
-        combined_generated = GeneratedSql(
-            sql=combined_sql,
-            plan="compound semantic query",
-            hit_path="semantic_template",
-            params=generated.params,
-            interaction_logs=interaction_logs,
-        )
-        return execution, combined_guard, combined_generated, scanned_rows
 
     def _semantic_hit_path(self, semantic_plan: SemanticPlan) -> str:
         if semantic_plan.status == "guarded_text2sql":

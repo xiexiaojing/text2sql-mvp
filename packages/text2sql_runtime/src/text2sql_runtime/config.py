@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .field_encryption import FieldEncryptionSettings
+
 
 @dataclass(frozen=True)
 class MySqlSettings:
@@ -52,6 +54,48 @@ class MySqlMcpSettings:
 
 
 @dataclass(frozen=True)
+class IntentRoutingSettings:
+    vector_distance_threshold: float = 0.45
+    fast_path_max_distance: float = 0.22
+    executable_max_distance: float = 0.35
+    min_candidate_gap: float = 0.12
+    min_ambiguity_gap: float = 0.05
+    strong_lexical_distance: float = 0.03
+    min_executable_confidence: float = 0.58
+    min_lexical_keyword_hits: int = 2
+    min_llm_select_confidence: float = 0.72
+    require_high_confidence_without_llm: bool = True
+
+    @classmethod
+    def from_performance(cls, performance: dict[str, Any]) -> IntentRoutingSettings:
+        raw = performance.get("intent_routing")
+        if not isinstance(raw, dict):
+            return cls()
+        return cls(
+            vector_distance_threshold=float(
+                raw.get("vector_distance_threshold", cls.vector_distance_threshold)
+            ),
+            fast_path_max_distance=float(raw.get("fast_path_max_distance", cls.fast_path_max_distance)),
+            executable_max_distance=float(
+                raw.get("executable_max_distance", cls.executable_max_distance)
+            ),
+            min_candidate_gap=float(raw.get("min_candidate_gap", cls.min_candidate_gap)),
+            min_ambiguity_gap=float(raw.get("min_ambiguity_gap", cls.min_ambiguity_gap)),
+            strong_lexical_distance=float(raw.get("strong_lexical_distance", cls.strong_lexical_distance)),
+            min_executable_confidence=float(
+                raw.get("min_executable_confidence", cls.min_executable_confidence)
+            ),
+            min_lexical_keyword_hits=int(raw.get("min_lexical_keyword_hits", cls.min_lexical_keyword_hits)),
+            min_llm_select_confidence=float(
+                raw.get("min_llm_select_confidence", cls.min_llm_select_confidence)
+            ),
+            require_high_confidence_without_llm=bool(
+                raw.get("require_high_confidence_without_llm", cls.require_high_confidence_without_llm)
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class IntentVectorSettings:
     enabled: bool
     provider: str
@@ -77,6 +121,7 @@ class RuntimeSettings:
     llm: LlmSettings
     intent_vector: IntentVectorSettings
     performance: dict[str, Any]
+    field_encryption: FieldEncryptionSettings
 
     @property
     def live_execution(self) -> bool:
@@ -158,6 +203,7 @@ def load_settings(project_root: Path | None = None) -> RuntimeSettings:
         llm=llm,
         intent_vector=intent_vector,
         performance=performance,
+        field_encryption=FieldEncryptionSettings.from_env(),
     )
 
 

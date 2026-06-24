@@ -39,3 +39,17 @@ allowed_functions:
 cache:
   enabled: false
   ttl_seconds: 300
+intent_routing:
+  vector_distance_threshold: 0.45
+  fast_path_max_distance: 0.22
+  executable_max_distance: 0.35
+  min_candidate_gap: 0.12
+  min_ambiguity_gap: 0.05
+  strong_lexical_distance: 0.03
+  min_executable_confidence: 0.58
+  min_lexical_keyword_hits: 2
+  min_llm_select_confidence: 0.72
+  require_high_confidence_without_llm: true
+memory:
+  top_k: 3
+  min_score: 1.0

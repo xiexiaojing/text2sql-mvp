@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .models import GeneratedSql, RejectedQuery
-from .semantics import epoch_ms_for_age_at_least
+from .semantics import epoch_ms_for_age_at_least, is_set_epoch_ms_sql
 
 
 @dataclass(frozen=True)
@@ -152,6 +152,10 @@ class EntityQueryCompiler:
         limit = None
 
         for attr in schema.attributes.values():
+            completeness = _field_completeness_filter(question, attr)
+            if completeness is not None:
+                filters.append({"field": attr.name, "op": completeness, "value": True})
+                continue
             if attr.kind == "enum":
                 value = _enum_value_from_question(question, attr, slots.get(attr.name))
                 if value is not None and not _is_group_request(question, attr):
@@ -173,9 +177,9 @@ class EntityQueryCompiler:
             elif attr.kind == "label_group" and _is_group_request(question, attr):
                 group_by.append(attr.name)
 
-        if entity_id == "party_member" and _mentions_rank(question) and "party_branch_name" in schema.attributes:
-            if "party_branch_name" not in group_by:
-                group_by.append("party_branch_name")
+        if entity_id == "merchant" and _mentions_rank(question) and "merchant_name" in schema.attributes:
+            if "merchant_name" not in group_by:
+                group_by.append("merchant_name")
             order_by.append({"field": "total", "direction": "desc"})
         elif _mentions_rank(question):
             order_by.append({"field": "total", "direction": "desc"})
@@ -236,6 +240,10 @@ class EntityQueryCompiler:
             return None
         op = str(item.get("op") or "=")
         value = item.get("value")
+        if op in {"filled", "empty"}:
+            if not attr.column:
+                return None
+            return {"field": field, "op": op, "value": value}
         if attr.kind == "enum":
             normalized = _normalize_enum_value(attr, value)
             if normalized is None:
@@ -312,17 +320,26 @@ class EntityQueryCompiler:
         value: Any,
         params: dict[str, Any],
     ) -> str:
+        if op in {"filled", "empty"}:
+            if not attr.column:
+                raise RejectedQuery(f"属性缺少源字段: {attr.name}", "entity_field_invalid")
+            column = f"{schema.alias}.{attr.column}"
+            if op == "filled":
+                return f"({column} IS NOT NULL AND {column} <> '')"
+            return f"({column} IS NULL OR {column} = '')"
         if attr.kind == "age":
             if not attr.column:
                 raise RejectedQuery(f"年龄属性缺少源字段: {attr.name}", "entity_field_invalid")
             age = int(value)
             param_name = f"{attr.name}_{len(params)}"
             params[param_name] = epoch_ms_for_age_at_least(age)
+            column = f"{schema.alias}.{attr.column}"
+            valid = is_set_epoch_ms_sql(column)
             if op in {">=", ">"}:
-                return f"{schema.alias}.{attr.column} <= %({param_name})s"
+                return f"{valid} AND {column} <= %({param_name})s"
             if op in {"<", "<="}:
-                return f"{schema.alias}.{attr.column} > %({param_name})s"
-            return f"{schema.alias}.{attr.column} <= %({param_name})s"
+                return f"{valid} AND {column} > %({param_name})s"
+            return f"{valid} AND {column} <= %({param_name})s"
         if attr.kind not in {"enum", "boolean"} or not attr.column:
             raise RejectedQuery(f"属性不支持过滤: {attr.name}", "entity_filter_not_allowed")
         param_name = f"{attr.name}_{len(params)}"
@@ -333,12 +350,30 @@ class EntityQueryCompiler:
 def _age_group_case(column: str) -> str:
     return (
         "CASE "
-        f"WHEN {column} IS NULL OR {column} <= 0 THEN '未知' "
+        f"WHEN {column} IS NULL OR {column} = 0 THEN '未知' "
         f"WHEN {column} > {epoch_ms_for_age_at_least(18)} THEN '0-17岁' "
         f"WHEN {column} > {epoch_ms_for_age_at_least(35)} THEN '18-34岁' "
         f"WHEN {column} > {epoch_ms_for_age_at_least(60)} THEN '35-59岁' "
         "ELSE '60岁及以上' END"
     )
+
+
+def _field_completeness_filter(question: str, attr: EntityAttribute) -> str | None:
+    label = (attr.label or attr.name or "").strip()
+    if not label:
+        return None
+    empty_markers = ("未填", "没填", "缺失", "缺少", "为空", "未填写", "没有填写", "未录入")
+    fill_markers = ("填写", "已填", "填了", "有填", "已填写")
+    if label in question:
+        if any(marker in question for marker in empty_markers):
+            return "empty"
+        if any(marker in question for marker in fill_markers):
+            return "filled"
+    if any(marker in question for marker in fill_markers) and label in question:
+        return "filled"
+    if any(marker in question for marker in empty_markers) and label in question:
+        return "empty"
+    return None
 
 
 def _enum_value_from_question(question: str, attr: EntityAttribute, default: Any = None) -> str | None:

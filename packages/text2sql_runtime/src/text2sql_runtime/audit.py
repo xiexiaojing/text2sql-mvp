@@ -150,6 +150,182 @@ class SQLiteAuditStore:
             ],
         }
 
+    def new_unsupported_questions(
+        self,
+        *,
+        since_ms: int,
+        until_ms: int | None = None,
+        limit: int = 50,
+        reason: str = UNCONFIGURED_SEMANTIC_REASON,
+        exclude_user_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        bounded_limit = max(1, min(int(limit), 500))
+        filters = [
+            "qa.status = 'rejected'",
+            "qa.rejection_reason = ?",
+        ]
+        params: list[Any] = [reason]
+        if exclude_user_ids:
+            placeholders = ", ".join("?" for _ in exclude_user_ids)
+            filters.append(f"(qa.user_id IS NULL OR qa.user_id NOT IN ({placeholders}))")
+            params.extend(exclude_user_ids)
+        where_clause = " AND ".join(filters)
+        having_parts = ["MIN(qa.created_at) >= ?"]
+        having_params: list[Any] = [int(since_ms)]
+        if until_ms is not None:
+            having_parts.append("MIN(qa.created_at) < ?")
+            having_params.append(int(until_ms))
+        having_clause = " AND ".join(having_parts)
+        query = f"""
+            SELECT
+              qa.question,
+              COUNT(*) AS count,
+              MIN(qa.created_at) AS first_seen_at,
+              MAX(qa.created_at) AS latest_seen_at,
+              (
+                SELECT latest.query_id
+                FROM query_audit latest
+                WHERE latest.question = qa.question
+                  AND latest.status = 'rejected'
+                  AND latest.rejection_reason = ?
+                ORDER BY latest.created_at DESC
+                LIMIT 1
+              ) AS latest_query_id,
+              (
+                SELECT latest.domain_id
+                FROM query_audit latest
+                WHERE latest.question = qa.question
+                  AND latest.status = 'rejected'
+                  AND latest.rejection_reason = ?
+                ORDER BY latest.created_at DESC
+                LIMIT 1
+              ) AS latest_domain_id,
+              (
+                SELECT latest.user_id
+                FROM query_audit latest
+                WHERE latest.question = qa.question
+                  AND latest.status = 'rejected'
+                  AND latest.rejection_reason = ?
+                ORDER BY latest.created_at DESC
+                LIMIT 1
+              ) AS latest_user_id
+            FROM query_audit qa
+            WHERE {where_clause}
+            GROUP BY qa.question
+            HAVING {having_clause}
+            ORDER BY first_seen_at DESC
+            LIMIT ?
+        """
+        query_params = [
+            reason,
+            reason,
+            reason,
+            *params,
+            *having_params,
+            bounded_limit,
+        ]
+        count_query = f"""
+            SELECT COUNT(*) AS unique_count
+            FROM (
+              SELECT qa.question
+              FROM query_audit qa
+              WHERE {where_clause}
+              GROUP BY qa.question
+              HAVING {having_clause}
+            )
+        """
+        count_params = [*params, *having_params]
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(query, query_params).fetchall()
+            summary = connection.execute(count_query, count_params).fetchone()
+        return {
+            "reason": reason,
+            "unique": int(summary["unique_count"] if summary else 0),
+            "limit": bounded_limit,
+            "sinceMs": since_ms,
+            "untilMs": until_ms,
+            "items": [
+                {
+                    "question": row["question"],
+                    "count": int(row["count"]),
+                    "firstSeenAt": int(row["first_seen_at"]),
+                    "latestSeenAt": int(row["latest_seen_at"]),
+                    "latestQueryId": row["latest_query_id"],
+                    "domainId": row["latest_domain_id"],
+                    "userId": row["latest_user_id"],
+                }
+                for row in rows
+            ],
+        }
+
+    def top_questions(
+        self,
+        *,
+        since_ms: int,
+        until_ms: int | None = None,
+        limit: int = 10,
+        exclude_user_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        bounded_limit = max(1, min(int(limit), 100))
+        filters: list[str] = ["qa.created_at >= ?"]
+        params: list[Any] = [int(since_ms)]
+        if until_ms is not None:
+            filters.append("qa.created_at < ?")
+            params.append(int(until_ms))
+        if exclude_user_ids:
+            placeholders = ", ".join("?" for _ in exclude_user_ids)
+            filters.append(f"(qa.user_id IS NULL OR qa.user_id NOT IN ({placeholders}))")
+            params.extend(exclude_user_ids)
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT
+              qa.question,
+              COUNT(*) AS count,
+              MIN(qa.created_at) AS first_seen_at,
+              MAX(qa.created_at) AS latest_seen_at,
+              SUM(CASE WHEN qa.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
+              SUM(
+                CASE
+                  WHEN qa.rejection_reason = ? THEN 1
+                  ELSE 0
+                END
+              ) AS unsupported_count
+            FROM query_audit qa
+            WHERE {where_clause}
+            GROUP BY qa.question
+            ORDER BY count DESC, latest_seen_at DESC
+            LIMIT ?
+        """
+        query_params = [UNCONFIGURED_SEMANTIC_REASON, *params, bounded_limit]
+        summary_query = f"""
+            SELECT COUNT(*) AS total, COUNT(DISTINCT qa.question) AS unique_count
+            FROM query_audit qa
+            WHERE {where_clause}
+        """
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(query, query_params).fetchall()
+            summary = connection.execute(summary_query, params).fetchone()
+        return {
+            "total": int(summary["total"] if summary else 0),
+            "unique": int(summary["unique_count"] if summary else 0),
+            "limit": bounded_limit,
+            "sinceMs": since_ms,
+            "untilMs": until_ms,
+            "items": [
+                {
+                    "question": row["question"],
+                    "count": int(row["count"]),
+                    "firstSeenAt": int(row["first_seen_at"]),
+                    "latestSeenAt": int(row["latest_seen_at"]),
+                    "rejectedCount": int(row["rejected_count"]),
+                    "unsupportedCount": int(row["unsupported_count"]),
+                }
+                for row in rows
+            ],
+        }
+
     def _init(self) -> None:
         with sqlite3.connect(str(self.path)) as connection:
             connection.execute(

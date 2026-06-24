@@ -104,6 +104,22 @@ def test_query_phone_lookup_uses_parameterized_filter(service_with_sensitive_fie
     assert result.semantic_plan["slots"]["phone"] == "13800138000"
 
 
+def test_query_encrypts_phone_when_field_encryption_enabled(service_with_field_encryption):
+    result = service_with_field_encryption.query(
+        QueryInput(
+            question="有手机号13800138000的订单吗",
+            domain_id="domain-1",
+            allow_return_sql=True,
+        )
+    )
+
+    assert result.status == "planned"
+    assert result.execution_params is not None
+    assert result.execution_params["phone"].startswith("sm4:")
+    assert "13800138000" not in result.generated_sql
+    assert "payer_mobile = %(phone)s" in result.generated_sql
+
+
 def test_query_sensitive_fields_when_enabled(service_with_sensitive_fields):
     result = service_with_sensitive_fields.query(
         QueryInput(

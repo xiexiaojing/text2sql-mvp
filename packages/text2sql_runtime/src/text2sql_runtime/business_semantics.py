@@ -1,34 +1,22 @@
 from __future__ import annotations
 
-import datetime as dt
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .address_parser import build_room_name_path_likes, parse_room_address
 from .entity_query import EntityQueryCompiler
 from .intent_vector import IntentVectorCandidate, IntentVectorIndex, build_intent_vector_index
 from .models import GeneratedSql, RejectedQuery
 from .rejection_reasons import UNCONFIGURED_SEMANTIC_REASON
 from .semantic_slot_extractor import LlmSlotExtractor, SlotExtractionResult
-from .semantics import (
-    epoch_ms_for_age_at_least,
-    month_end_epoch_ms,
-    month_start_epoch_ms,
-    week_end_epoch_ms,
-    week_start_epoch_ms,
-)
-from .config import IntentVectorSettings, LlmSettings, load_yaml
+from .semantic_slots import computed_values, derive_slots, extract_slots
+from .config import FieldEncryptionSettings, IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
+from .field_encryption import CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON, encrypt_sensitive_query_params
 
-CHINESE_NAME_RE = re.compile(r"[\u4e00-\u9fa5]{2,4}")
-PHONE_RE = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
-CARD_RE = re.compile(r"(?<![A-Za-z0-9])([0-9Xx]{15,18})(?![A-Za-z0-9])")
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 OPTIONAL_BLOCK_RE = re.compile(r"\[\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*?)\]\]", re.DOTALL)
-_STRONG_LEXICAL_DISTANCE = 0.05
-_FAST_LLM_SKIP_VECTOR_DISTANCE = 0.35
 
 
 @dataclass(frozen=True)
@@ -120,12 +108,16 @@ class BusinessSemanticIndex:
         vector_index: IntentVectorIndex | None = None,
         entity_query_compiler: EntityQueryCompiler | None = None,
         llm_slot_policy: str | None = None,
+        routing_settings: IntentRoutingSettings | None = None,
+        field_encryption: FieldEncryptionSettings | None = None,
     ) -> None:
         self.entities = entities
         self.intents = intents
         self.templates = templates
+        self.field_encryption = field_encryption or FieldEncryptionSettings()
         self.entity_query_compiler = entity_query_compiler or EntityQueryCompiler({})
         self._intents_by_id = {intent.intent_id: intent for intent in intents}
+        self.routing = routing_settings or IntentRoutingSettings()
         self.vector_index = vector_index or build_intent_vector_index(vector_settings)
         self.slot_extractor = slot_extractor or (LlmSlotExtractor(llm_settings) if llm_settings else None)
         self._llm_configured = bool(llm_settings and llm_settings.configured)
@@ -144,6 +136,8 @@ class BusinessSemanticIndex:
         slot_extractor: LlmSlotExtractor | None = None,
         vector_index: IntentVectorIndex | None = None,
         llm_slot_policy: str | None = None,
+        routing_settings: IntentRoutingSettings | None = None,
+        field_encryption: FieldEncryptionSettings | None = None,
     ) -> "BusinessSemanticIndex":
         if not path.exists():
             return cls(
@@ -156,8 +150,14 @@ class BusinessSemanticIndex:
                 vector_index=vector_index,
                 entity_query_compiler=EntityQueryCompiler({}),
                 llm_slot_policy=llm_slot_policy,
+                routing_settings=routing_settings,
+                field_encryption=field_encryption,
             )
         raw = load_yaml(path)
+        performance_path = path.parent / "performance.yaml"
+        routing = routing_settings or IntentRoutingSettings.from_performance(
+            load_yaml(performance_path) if performance_path.exists() else {}
+        )
         intents = [
             BusinessIntent(
                 intent_id=str(item["id"]),
@@ -212,6 +212,8 @@ class BusinessSemanticIndex:
             vector_index=vector_index,
             entity_query_compiler=EntityQueryCompiler.from_config(raw.get("entity_query_schemas")),
             llm_slot_policy=llm_slot_policy,
+            routing_settings=routing,
+            field_encryption=field_encryption,
         )
 
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
@@ -221,6 +223,13 @@ class BusinessSemanticIndex:
             matched = self._best_intent(question)
             if matched is not None:
                 intent, confidence = matched
+                if not self._passes_lexical_only_gate(question, intent, confidence):
+                    return SemanticPlan(
+                        status="unsupported",
+                        reason=UNCONFIGURED_SEMANTIC_REASON,
+                        elapsed_ms=self._elapsed_ms(started),
+                        slot_source="legacy_keywords_rejected",
+                    )
                 slots = self._complete_slots(
                     question,
                     intent,
@@ -228,6 +237,7 @@ class BusinessSemanticIndex:
                     use_heuristic=True,
                 )
                 return self._build_plan(
+                    question,
                     intent,
                     slots,
                     confidence,
@@ -280,6 +290,8 @@ class BusinessSemanticIndex:
         slots: dict[str, Any]
         slot_source: str
         slot_elapsed_ms: int
+        llm_selected = False
+        llm_confidence = 0.0
         if extraction and extraction.intent_id and extraction.intent_id in self._intents_by_id:
             intent = self._intents_by_id[extraction.intent_id]
             selected_candidate = self._candidate_for_intent(candidates, intent.intent_id) or candidates[0]
@@ -289,12 +301,27 @@ class BusinessSemanticIndex:
                 extraction.slots,
                 use_heuristic=False,
             )
+            llm_confidence = float(extraction.confidence or 0.0)
             confidence = extraction.confidence or _confidence_from_distance(selected_candidate.distance)
             slot_source = extraction.source
             slot_elapsed_ms = extraction.elapsed_ms
+            llm_selected = extraction.decision == "select"
         else:
             selected_candidate = candidates[0]
             intent = self._intents_by_id[selected_candidate.intent_id]
+            if self.routing.require_high_confidence_without_llm and not self._passes_executable_routing_gate(
+                question,
+                intent,
+                selected_candidate,
+                candidates,
+            ):
+                return SemanticPlan(
+                    status="unsupported",
+                    reason=UNCONFIGURED_SEMANTIC_REASON,
+                    elapsed_ms=self._elapsed_ms(started),
+                    candidate_intents=candidate_intents,
+                    slot_source="heuristic_low_confidence",
+                )
             slots = self._complete_slots(
                 question,
                 intent,
@@ -315,7 +342,38 @@ class BusinessSemanticIndex:
             extraction.slots if extraction else {},
         )
 
+        if intent.status == "executable" and llm_selected:
+            if llm_confidence < self.routing.min_llm_select_confidence and not self._passes_executable_routing_gate(
+                question,
+                intent,
+                selected_candidate,
+                candidates,
+            ):
+                return SemanticPlan(
+                    status="unsupported",
+                    reason=UNCONFIGURED_SEMANTIC_REASON,
+                    elapsed_ms=self._elapsed_ms(started),
+                    candidate_intents=candidate_intents,
+                    slot_source=f"{slot_source}_llm_low_confidence",
+                    slot_elapsed_ms=slot_elapsed_ms,
+                )
+        elif intent.status == "executable" and not llm_selected and not self._passes_executable_routing_gate(
+            question,
+            intent,
+            selected_candidate,
+            candidates,
+        ):
+            return SemanticPlan(
+                status="unsupported",
+                reason=UNCONFIGURED_SEMANTIC_REASON,
+                elapsed_ms=self._elapsed_ms(started),
+                candidate_intents=candidate_intents,
+                slot_source=f"{slot_source}_routing_rejected",
+                slot_elapsed_ms=slot_elapsed_ms,
+            )
+
         return self._build_plan(
+            question,
             intent,
             slots,
             confidence,
@@ -329,6 +387,7 @@ class BusinessSemanticIndex:
 
     def _build_plan(
         self,
+        question: str,
         intent: BusinessIntent,
         slots: dict[str, Any],
         confidence: float,
@@ -348,12 +407,27 @@ class BusinessSemanticIndex:
                 _empty(slots.get("table_name")) or _empty(slots.get("column_name"))
             ):
                 status = "needs_clarification"
-                reason = "请说明要查询哪个字段，例如：resident.residence_status 或「居住状况」。"
+                reason = "请说明要查询哪个字段，例如：table_name.column_name。"
         elif status == "metadata":
             pass
+        elif intent.intent_id == "resident_card_lookup" and status == "executable":
+            if all(_empty(slots.get(name)) for name in ("card_no", "card_prefix", "card_suffix")):
+                status = "needs_clarification"
+                reason = "缺少必要条件：card_no"
+            elif self.field_encryption.active and (
+                not _empty(slots.get("card_prefix")) or not _empty(slots.get("card_suffix"))
+            ):
+                status = "needs_clarification"
+                reason = CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON
         elif status == "executable" and missing_slots:
             status = "needs_clarification"
-            reason = f"缺少必要条件：{', '.join(missing_slots)}"
+            from .disambiguation import missing_slot_clarification_reason
+
+            clarify_reason = missing_slot_clarification_reason(question, intent.intent_id, missing_slots)
+            if clarify_reason:
+                reason = clarify_reason
+            else:
+                reason = f"缺少必要条件：{', '.join(missing_slots)}"
         elif status == "executable" and not intent.template_id:
             status = "needs_mapping"
             reason = "该意图缺少可执行 SQL 模板。"
@@ -484,67 +558,11 @@ class BusinessSemanticIndex:
         return slots
 
     def _derive_slots(self, intent: BusinessIntent, slots: dict[str, Any]) -> None:
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots and _empty(slots.get("age")):
-            slots["age"] = 60
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if not _empty(slots.get("sexual")):
-            normalized_sexual = _normalize_sexual(str(slots["sexual"]))
-            if normalized_sexual:
-                slots["sexual"] = normalized_sexual
-        if not _empty(slots.get("marital_status")):
-            normalized_marital_status = _normalize_marital_status(str(slots["marital_status"]))
-            if normalized_marital_status:
-                slots["marital_status"] = normalized_marital_status
-        if not _empty(slots.get("role_like")):
-            slots["role_like"] = _normalize_like_value(str(slots["role_like"]))
-        elif "role_like" in requested_slots and not _empty(slots.get("role")):
-            slots["role_like"] = _like_value(str(slots["role"]))
-        if not _empty(slots.get("tag_like")):
-            slots["tag_like"] = _normalize_like_value(str(slots["tag_like"]))
-        elif "tag_like" in requested_slots and not _empty(slots.get("tag_name")):
-            tag_name = str(slots["tag_name"])
-            slots["tag_like"] = "%独居%" if tag_name.startswith("独居") else _like_value(tag_name)
-        if not _empty(slots.get("party_branch_path_like")):
-            slots["party_branch_path_like"] = _normalize_party_branch_path_like(
-                str(slots["party_branch_path_like"])
-            )
-        elif not _empty(slots.get("party_branch_name")):
-            slots["party_branch_path_like"] = _party_branch_member_path_like(
-                str(slots["party_branch_name"])
-            )
-        like_slots = {
-            "merchant_name": "merchant_name_like",
-            "area_name": "area_like",
-            "category": "category_like",
-            "field_name": "field_like",
-            "skill": "skill_like",
-            "grid_name": "grid_name_like",
-            "person_name": "person_name_like",
-        }
-        for slot_name, like_slot in like_slots.items():
-            if not _empty(slots.get(like_slot)):
-                slots[like_slot] = _normalize_like_value(str(slots[like_slot]))
-            elif not _empty(slots.get(slot_name)):
-                slots[like_slot] = _like_value(str(slots[slot_name]))
-        if not _empty(slots.get("field_like")) and "tag_like" in requested_slots:
-            slots.setdefault("tag_like", str(slots["field_like"]))
-        if (
-            "address_like" in requested_slots
-            and not _empty(slots.get("address_like"))
-        ):
-            _derive_address_like_slots(slots, str(slots["address_like"]))
-        elif (
-            "address_like" in requested_slots
-            and not _empty(slots.get("address"))
-        ):
-            _derive_address_like_slots(slots, str(slots["address"]))
+        derive_slots(
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slots=slots,
+        )
 
     def _intent_vector_payload(self, intent: BusinessIntent) -> dict[str, Any]:
         semantic: dict[str, Any] = {
@@ -576,6 +594,11 @@ class BusinessSemanticIndex:
             for param_name, slot_name in template.params.items()
             if not _empty(plan.slots.get(slot_name))
         }
+        params = encrypt_sensitive_query_params(
+            params,
+            intent_id=plan.intent or "",
+            settings=self.field_encryption,
+        )
         log = {
             "kind": "semantic_template",
             "status": "ok",
@@ -634,115 +657,89 @@ class BusinessSemanticIndex:
         return intent, round(confidence, 2)
 
     def _extract_slots(self, question: str, intent: BusinessIntent) -> dict[str, Any]:
-        slots: dict[str, Any] = dict(intent.slot_defaults)
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots:
-            slots.setdefault("age", _extract_age(question) or 60)
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "month_end_ms" in requested_slots:
-            slots["month_end_ms"] = month_end_epoch_ms()
-        if "week_start_ms" in requested_slots:
-            slots["week_start_ms"] = week_start_epoch_ms()
-        if "week_end_ms" in requested_slots:
-            slots["week_end_ms"] = week_end_epoch_ms()
-        if "current_year" in requested_slots:
-            slots["current_year"] = dt.date.today().year
-        if "current_month" in requested_slots:
-            slots["current_month"] = dt.date.today().month
-        if "apply_month_scope" in requested_slots and _question_has_month_scope(question):
-            slots["apply_month_scope"] = True
-        if "apply_week_scope" in requested_slots and _question_has_week_scope(question):
-            slots["apply_week_scope"] = True
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if "sexual" in requested_slots:
-            sexual = _extract_sexual(question, slots.get("sexual"))
-            if sexual:
-                slots["sexual"] = sexual
-        if "marital_status" in requested_slots:
-            marital_status = _extract_marital_status(question, slots.get("marital_status"))
-            if marital_status:
-                slots["marital_status"] = marital_status
-        if "person_name" in requested_slots:
-            name = _extract_person_name(question, intent.intent_id)
-            if name:
-                slots["person_name"] = name
-        if "party_branch_name" in requested_slots:
-            branch = _extract_party_branch(question)
-            if branch:
-                slots["party_branch_name"] = branch
-        if "grid_name" in requested_slots:
-            grid_name = _extract_grid_name(question)
-            if grid_name:
-                slots["grid_name"] = grid_name
-        if "address" in requested_slots or "address_like" in requested_slots:
-            address = _extract_address(question)
-            if address:
-                address = _normalize_compound_building_address(address)
-                slots["address"] = address
-                slots["address_like"] = _like_value(address)
-        if "role" in requested_slots or "role_like" in requested_slots:
-            role = _extract_role(question, intent.intent_id, slots.get("role"))
-            if role:
-                slots["role"] = role
-                slots["role_like"] = _like_value(role)
-        if "tag_name" in requested_slots:
-            tag_name = _extract_tag_name(question, slots.get("tag_name"))
-            if tag_name:
-                slots["tag_name"] = tag_name
-        if "tag_like" in requested_slots and not _empty(slots.get("tag_name")):
-            tag_name = str(slots["tag_name"])
-            slots["tag_like"] = "%独居%" if tag_name.startswith("独居") else _like_value(tag_name)
-        if "skill" in requested_slots or "skill_like" in requested_slots:
-            skill = _extract_skill(question, slots.get("skill"))
-            if skill:
-                slots["skill"] = skill
-                slots["skill_like"] = _like_value(skill)
-        if "merchant_name" in requested_slots or "merchant_name_like" in requested_slots:
-            merchant_name = _extract_merchant_name(question)
-            if merchant_name:
-                slots["merchant_name"] = merchant_name
-                slots["merchant_name_like"] = _like_value(merchant_name)
-        if "area_name" in requested_slots or "area_like" in requested_slots:
-            area_name = _extract_area_name(question)
-            if area_name:
-                slots["area_name"] = area_name
-                slots["area_like"] = _like_value(area_name)
-        if "category" in requested_slots or "category_like" in requested_slots:
-            category = _extract_category(question, slots.get("category"))
-            if category:
-                slots["category"] = category
-                slots["category_like"] = _like_value(category)
-        if "field_name" in requested_slots or "field_like" in requested_slots:
-            field_name = _extract_field_name(question, slots.get("field_name"))
-            if field_name:
-                slots["field_name"] = field_name
-                slots["field_like"] = _like_value(field_name)
-        if "result_limit" in requested_slots:
-            slots["result_limit"] = _extract_result_limit(question, int(slots.get("result_limit") or 10))
-        if intent.intent_id == "field_explanation":
-            match = re.search(
-                r"\b([a-z][a-z0-9_]*)\s*\.\s*([a-z][a-z0-9_]*)\b",
-                question,
-                re.IGNORECASE,
-            )
-            if match:
-                slots.setdefault("table_name", match.group(1).lower())
-                slots.setdefault("column_name", match.group(2).lower())
-                slots.setdefault("field_name", f"{match.group(1).lower()}.{match.group(2).lower()}")
-        if "phone" in requested_slots:
-            match = PHONE_RE.search(question)
-            if match:
-                slots["phone"] = match.group(1)
-        if "card_no" in requested_slots:
-            match = CARD_RE.search(question)
-            if match:
-                slots["card_no"] = match.group(1)
-        return slots
+        return extract_slots(
+            question,
+            intent_id=intent.intent_id,
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slot_defaults=intent.slot_defaults,
+        )
+
+    def _normalized_question(self, question: str) -> str:
+        return re.sub(r"\s+", "", question.strip())
+
+    def _question_matches_intent_example(self, question: str, intent: BusinessIntent) -> bool:
+        normalized_question = self._normalized_question(question)
+        for example in intent.examples:
+            if not example:
+                continue
+            normalized_example = self._normalized_question(example)
+            if normalized_question == normalized_example or example in question:
+                return True
+        return False
+
+    def _candidate_gap(self, candidates: list[IntentVectorCandidate]) -> float:
+        if len(candidates) < 2:
+            return 1.0
+        return candidates[1].distance - candidates[0].distance
+
+    def _passes_lexical_only_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        confidence: float,
+    ) -> bool:
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if confidence >= self.routing.min_executable_confidence:
+            return True
+        return False
+
+    def _is_ambiguous_candidate_set(self, candidates: list[IntentVectorCandidate]) -> bool:
+        if len(candidates) < 2:
+            return False
+        first = candidates[0]
+        second = candidates[1]
+        if first.distance > self.routing.executable_max_distance:
+            return False
+        if second.distance > self.routing.executable_max_distance:
+            return False
+        return self._candidate_gap(candidates) < self.routing.min_ambiguity_gap
+
+    def _passes_executable_routing_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        selected_candidate: IntentVectorCandidate,
+        candidates: list[IntentVectorCandidate],
+    ) -> bool:
+        if intent.status != "executable":
+            return True
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if selected_candidate.distance <= 0.01:
+            return True
+        lexical = self._lexical_candidate(question)
+        if (
+            lexical is not None
+            and lexical.intent_id == intent.intent_id
+            and lexical.distance <= self.routing.strong_lexical_distance
+        ):
+            return True
+        if selected_candidate.matched_query == "keyword_match" and lexical is not None:
+            if (
+                lexical.intent_id == intent.intent_id
+                and lexical.distance <= self.routing.strong_lexical_distance + 0.02
+            ):
+                return True
+        distance = selected_candidate.distance
+        if distance > self.routing.executable_max_distance:
+            return False
+        if _confidence_from_distance(distance) < self.routing.min_executable_confidence:
+            return False
+        if self._is_ambiguous_candidate_set(candidates):
+            return False
+        return True
 
     def _try_fast_heuristic_plan(
         self,
@@ -773,6 +770,7 @@ class BusinessSemanticIndex:
             {},
         )
         return self._build_plan(
+            question,
             intent,
             slots,
             confidence,
@@ -798,17 +796,16 @@ class BusinessSemanticIndex:
             normalized_example = re.sub(r"\s+", "", example.strip())
             if normalized_question == normalized_example or example in question:
                 return True
-        if selected_candidate.distance <= _FAST_LLM_SKIP_VECTOR_DISTANCE:
+        if selected_candidate.distance <= self.routing.fast_path_max_distance:
             if len(candidates) == 1:
                 return True
-            second_distance = candidates[1].distance
-            if second_distance - selected_candidate.distance >= 0.08:
+            if self._candidate_gap(candidates) >= self.routing.min_candidate_gap:
                 return True
         lexical = self._lexical_candidate(question)
         if (
             lexical is not None
             and lexical.intent_id == intent.intent_id
-            and lexical.distance <= _STRONG_LEXICAL_DISTANCE
+            and lexical.distance <= self.routing.strong_lexical_distance
         ):
             return True
         return False
@@ -853,7 +850,7 @@ class BusinessSemanticIndex:
         extracted_slots: dict[str, Any],
     ) -> tuple[BusinessIntent, IntentVectorCandidate, dict[str, Any], float, str]:
         lexical = self._lexical_candidate(question)
-        if lexical is None or lexical.distance > _STRONG_LEXICAL_DISTANCE:
+        if lexical is None or lexical.distance > self.routing.strong_lexical_distance:
             return intent, selected_candidate, slots, confidence, slot_source
 
         lexical_intent = self._intents_by_id.get(lexical.intent_id)
@@ -878,7 +875,7 @@ class BusinessSemanticIndex:
         )
 
     def _render_sql(self, sql: str, slots: dict[str, Any]) -> str:
-        values = _computed_values(slots)
+        values = computed_values(slots)
 
         def optional_block(match: re.Match[str]) -> str:
             slot_name = match.group(1)
@@ -1347,3 +1344,4 @@ def _empty(value: Any) -> bool:
     if isinstance(value, str) and not value.strip():
         return True
     return False
+

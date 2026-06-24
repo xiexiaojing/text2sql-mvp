@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from .conversation import conversation_context_lines
+from .memory import MemoryRecord, format_memory_context_lines
 from .schema import SchemaCatalog
+from .semantic_enrichment import SemanticEnrichmentIndex
 from .semantics import SemanticIndex, epoch_ms_for_age_at_least
 
 
@@ -13,16 +15,19 @@ class SchemaContextBuilder:
         catalog: SchemaCatalog,
         semantics: SemanticIndex,
         allow_sensitive_fields: bool = False,
+        enrichment: SemanticEnrichmentIndex | None = None,
     ) -> None:
         self.catalog = catalog
         self.semantics = semantics
         self.allow_sensitive_fields = allow_sensitive_fields
+        self.enrichment = enrichment or SemanticEnrichmentIndex(global_notes=(), tables={})
 
     def build(
         self,
         question: str,
         candidate_tables: list[str],
         history: list[dict[str, Any]] | None = None,
+        memories: list[MemoryRecord] | None = None,
     ) -> str:
         concepts = self.semantics.detect(question)
         lines = [
@@ -52,6 +57,16 @@ class SchemaContextBuilder:
         conversation_lines = conversation_context_lines(history)
         if conversation_lines:
             lines.extend(conversation_lines)
+            lines.append("")
+        memory_lines = format_memory_context_lines(memories or [])
+        if memory_lines:
+            lines.extend(memory_lines)
+            lines.append("")
+        enrichment_lines = self.enrichment.context_lines(question, candidate_tables)
+        if enrichment_lines:
+            lines.append("Business enrichment notes (from offline semantics):")
+            for note in enrichment_lines:
+                lines.append(f"- {note}")
             lines.append("")
         sensitive_hint = self._sensitive_filter_hint(question)
         if sensitive_hint:
@@ -100,7 +115,7 @@ class SchemaContextBuilder:
     def _semantic_constraint_hint(self, rule: dict) -> str | None:
         if rule.get("type") != "age_at_least":
             return None
-        table_name = str(rule.get("table", "resident"))
+        table_name = str(rule.get("table", "payment_order"))
         column_name = str(rule.get("column", "born_at"))
         if not self.catalog.get(table_name):
             return None
@@ -109,8 +124,9 @@ class SchemaContextBuilder:
         age = int(rule["age"])
         cutoff = epoch_ms_for_age_at_least(age)
         return (
-            f"{table_name}.{column_name} <= {cutoff} for age >= {age}; "
-            "do not use DATE_SUB, CURDATE, YEAR, or date arithmetic for this field."
+            f"{table_name}.{column_name} IS NOT NULL AND {table_name}.{column_name} <> 0 "
+            f"AND {table_name}.{column_name} <= {cutoff} for age >= {age}; "
+            "epoch-ms values may be negative for pre-1970 dates; do not use DATE_SUB, CURDATE, YEAR, or date arithmetic."
         )
 
     def _sensitive_filter_hint(self, question: str) -> str | None:
@@ -118,14 +134,13 @@ class SchemaContextBuilder:
             return None
         if "手机号" in question or "手机" in question or "电话" in question:
             return (
-                "Sensitive lookup hint: if a phone number is present, filter resident by "
-                "(resident.mobile = '<number>' OR resident.contact_mobile = '<number>'); "
-                "do not answer with an unfiltered resident total."
+                "Sensitive lookup hint: if a phone number is present, filter merchant or payment_order "
+                "by the relevant contact/mobile column; do not answer with an unfiltered total."
             )
         if "身份证" in question or "证件号" in question or "证件" in question:
             return (
-                "Sensitive lookup hint: if a certificate number is present, filter resident by "
-                "resident.card_no = '<number>'; do not answer with an unfiltered resident total."
+                "Sensitive lookup hint: if a certificate number is present, filter by the matching "
+                "card/certificate column; do not answer with an unfiltered total."
             )
         return None
 
@@ -168,5 +183,5 @@ class SchemaContextBuilder:
                 continue
             add_table(table_name)
         if not selected:
-            add_table("resident")
+            add_table("payment_order")
         return selected[:6]
