@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import sys
 from functools import lru_cache
 from html import escape
 from pathlib import Path
@@ -10,6 +12,18 @@ from fastapi.responses import HTMLResponse
 from text2sql_runtime.evals import run_eval_cases
 from text2sql_runtime.models import QueryInput
 from text2sql_runtime.service import Text2SqlService
+
+# 确保 Python logging 输出 UTF-8，与 PYTHONIOENCODING=utf-8 配合
+# 将 text2sql 相关包的所有 DEBUG 日志输出到 stdout（最终写入 api.log）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+# 静默 uvicorn 自身的详细日志，避免重复
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 app = FastAPI(title="text2sql-mvp", version="0.1.0")
 

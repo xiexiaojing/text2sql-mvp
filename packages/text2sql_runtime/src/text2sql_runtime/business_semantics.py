@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 from .address_parser import build_room_name_path_likes, parse_room_address
 from .entity_query import EntityQueryCompiler
@@ -134,6 +137,7 @@ class BusinessSemanticIndex:
         if self._llm_slot_policy not in {"auto", "always", "never"}:
             self._llm_slot_policy = "auto"
         self._refresh_vector_index()
+        self._best_intent_last_question: str | None = None  # dedup detailed scoring logs
 
     @classmethod
     def from_config(
@@ -221,11 +225,48 @@ class BusinessSemanticIndex:
             matched = self._best_intent(question)
             if matched is not None:
                 intent, confidence = matched
+                # Try LLM slot extraction even in legacy keyword path.
+                # But first check if the question actually contains content beyond keywords.
+                # "有多少人" has no dept_name → skip LLM, instant fallback to defaults.
+                # "人力资源中心有多少人" has "人力资源中心" → worth calling LLM.
+                extracted_slots: dict[str, Any] = {}
+                use_heuristic = True
+                slot_source = "legacy_keywords_vector_disabled"
+                slot_elapsed_ms = 0
+                if self._llm_configured and self._llm_slot_policy != "never":
+                    # Skip LLM entirely when the intent has no slots to fill
+                    # (e.g. user_sex_ratio, user_count, dept_count, user_by_dept).
+                    if intent.required_slots or intent.optional_slots:
+                        if self._has_slot_content(question, intent):
+                            legacy_candidates = [self._legacy_candidate_projection(intent)]
+                            print(f"\n[SLOT-FLOW] calling LLM extractor for intent={intent.intent_id}, "
+                                  f"required_slots={intent.required_slots}, optional_slots={intent.optional_slots}",
+                                  flush=True)
+                            llm_result = self._extract_slots_with_llm(question, legacy_candidates, history)
+                            if llm_result is not None:
+                                extracted_slots = llm_result.slots
+                                use_heuristic = False
+                                slot_source = "llm_legacy"
+                                slot_elapsed_ms = llm_result.elapsed_ms
+                                print(f"[SLOT-FLOW] LLM returned: decision={llm_result.decision}, "
+                                      f"intent_id={llm_result.intent_id}, slots={llm_result.slots}",
+                                      flush=True)
+                            else:
+                                print(f"[SLOT-FLOW] LLM returned None, will use heuristic fallback", flush=True)
                 slots = self._complete_slots(
                     question,
                     intent,
-                    {},
-                    use_heuristic=True,
+                    extracted_slots,
+                    use_heuristic=use_heuristic,
+                )
+                _log_plan_result(
+                    question=question,
+                    status=intent.status,
+                    intent_id=intent.intent_id,
+                    display_name=intent.display_name,
+                    slot_source=slot_source,
+                    confidence=confidence,
+                    elapsed_ms=self._elapsed_ms(started),
                 )
                 return self._build_plan(
                     intent,
@@ -235,11 +276,18 @@ class BusinessSemanticIndex:
                     candidate_intents=[],
                     matched_query=None,
                     vector_distance=None,
-                    slot_source="legacy_keywords_vector_disabled",
-                    slot_elapsed_ms=0,
+                    slot_source=slot_source,
+                    slot_elapsed_ms=slot_elapsed_ms,
                 )
 
         if not candidates:
+            _log_plan_result(
+                question=question,
+                status="unsupported",
+                slot_source="vector_no_candidate" if self.vector_index.enabled else "legacy_no_candidate",
+                elapsed_ms=self._elapsed_ms(started),
+                reason=UNCONFIGURED_SEMANTIC_REASON,
+            )
             return SemanticPlan(
                 status="unsupported",
                 reason=UNCONFIGURED_SEMANTIC_REASON,
@@ -265,6 +313,13 @@ class BusinessSemanticIndex:
         else:
             extraction = self._extract_slots_with_llm(question, candidate_intents, history)
         if extraction and extraction.decision == "fallback":
+            _log_plan_result(
+                question=question,
+                status="unsupported",
+                slot_source=extraction.source,
+                elapsed_ms=self._elapsed_ms(started),
+                reason=extraction.reason or UNCONFIGURED_SEMANTIC_REASON,
+            )
             return SemanticPlan(
                 status="unsupported",
                 reason=extraction.reason or UNCONFIGURED_SEMANTIC_REASON,
@@ -313,6 +368,17 @@ class BusinessSemanticIndex:
             confidence,
             slot_source,
             extraction.slots if extraction else {},
+        )
+
+        _log_plan_result(
+            question=question,
+            status=intent.status,
+            intent_id=intent.intent_id,
+            display_name=intent.display_name,
+            slot_source=slot_source,
+            confidence=confidence,
+            vector_distance=round(selected_candidate.distance, 4),
+            elapsed_ms=self._elapsed_ms(started),
         )
 
         return self._build_plan(
@@ -384,8 +450,10 @@ class BusinessSemanticIndex:
 
     def _candidate_intents(self, question: str) -> list[IntentVectorCandidate]:
         if not self.vector_index.enabled:
+            _logger.info("[CANDIDATE] vector disabled, returning []")
             return []
         if not self._refresh_vector_index():
+            _logger.info("[CANDIDATE] vector refresh failed, returning []")
             return []
         candidates = [
             candidate
@@ -395,8 +463,18 @@ class BusinessSemanticIndex:
             )
             if candidate.intent_id in self._intents_by_id
         ]
+        _logger.info("[CANDIDATE] ← %r → vector raw candidates (%d): %s",
+                     question, len(candidates),
+                     [(c.intent_id, round(c.distance, 4)) for c in candidates])
         lexical = self._lexical_candidate(question)
         if lexical:
+            merged_count = sum(1 for c in candidates if c.intent_id == lexical.intent_id)
+            if merged_count > 0:
+                _logger.info("[CANDIDATE] lexical merge: %s keyword distance=%.4f overlapped=%d",
+                            lexical.intent_id, lexical.distance, merged_count)
+            else:
+                _logger.info("[CANDIDATE] lexical merge: %s keyword distance=%.4f appended as new",
+                            lexical.intent_id, lexical.distance)
             candidates = [
                 lexical
                 if candidate.intent_id == lexical.intent_id and lexical.distance < candidate.distance
@@ -405,13 +483,17 @@ class BusinessSemanticIndex:
             ]
             if all(candidate.intent_id != lexical.intent_id for candidate in candidates):
                 candidates.append(lexical)
-        return sorted(
+        sorted_candidates = sorted(
             candidates,
             key=lambda candidate: (
                 candidate.distance,
                 -self._intents_by_id[candidate.intent_id].priority,
             ),
         )
+        _logger.info("[CANDIDATE] final ranking: %s",
+                     [(c.intent_id, round(c.distance, 4), self._intents_by_id[c.intent_id].priority)
+                      for c in sorted_candidates])
+        return sorted_candidates
 
     def _candidate_projection(self, candidate: IntentVectorCandidate) -> dict[str, Any]:
         intent = self._intents_by_id[candidate.intent_id]
@@ -445,6 +527,24 @@ class BusinessSemanticIndex:
                 return candidate
         return None
 
+    @staticmethod
+    def _legacy_candidate_projection(intent: BusinessIntent) -> dict[str, Any]:
+        """Build a candidate dict from a BusinessIntent for the legacy (no vector) LLM path."""
+        result: dict[str, Any] = {
+            "id": intent.intent_id,
+            "display_name": intent.display_name,
+            "status": intent.status,
+            "output_type": intent.output_type,
+            "required_slots": list(intent.required_slots),
+            "optional_slots": list(intent.optional_slots),
+            "slot_defaults": dict(intent.slot_defaults),
+            "allowed_slots": sorted(
+                set(intent.required_slots) | set(intent.optional_slots) | set(intent.slot_defaults)
+            ),
+            "examples": list(intent.examples)[:4],
+        }
+        return {key: value for key, value in result.items() if value not in ("", [], {}, None)}
+
     def _extract_slots_with_llm(
         self,
         question: str,
@@ -464,13 +564,16 @@ class BusinessSemanticIndex:
         use_heuristic: bool,
     ) -> dict[str, Any]:
         slots: dict[str, Any] = dict(intent.slot_defaults)
+        print(f"[SLOT-FLOW] _complete_slots: defaults={slots}, use_heuristic={use_heuristic}", flush=True)
         if use_heuristic:
             for key, value in self._extract_slots(question, intent).items():
                 if not _empty(value):
                     slots[key] = value
+            print(f"[SLOT-FLOW] _complete_slots: after heuristic={slots}", flush=True)
         for key, value in extracted_slots.items():
             if not _empty(value):
                 slots[key] = value
+        print(f"[SLOT-FLOW] _complete_slots: after LLM merge={slots}", flush=True)
         self._derive_slots(intent, slots)
         if intent.template_id == "dynamic_entity_query":
             self.entity_query_compiler.complete_slots(question, slots)
@@ -613,24 +716,88 @@ class BusinessSemanticIndex:
             for intent in self.intents
         ]
 
+    @staticmethod
+    def _has_slot_content(question: str, intent: BusinessIntent) -> bool:
+        """Check if question has content beyond known match keywords that could be a slot value.
+
+        "有多少人" → only keywords, no slot content → False (skip LLM, instant fallback)
+        "人力资源中心有多少人" → has "人力资源中心" beyond keywords → True (call LLM)
+        """
+        stripped = question.strip()
+        # Remove all known match_any keywords from the question
+        for keyword in sorted(intent.match_any, key=len, reverse=True):
+            stripped = stripped.replace(keyword, "")
+        # Remove match_all keywords
+        for keyword in intent.match_all:
+            stripped = stripped.replace(keyword, "")
+        # Remove known prefixes/suffixes that are not slot values
+        stripped = re.sub(r"^[的]?", "", stripped)
+        stripped = stripped.strip()
+        print(f"[SLOT-FLOW] _has_slot_content: question={question!r}, intent={intent.intent_id}, "
+              f"match_any={intent.match_any}, stripped={stripped!r}, result={len(stripped) >= 1}",
+              flush=True)
+        return len(stripped) >= 1
+
     def _best_intent(self, question: str) -> tuple[BusinessIntent, float] | None:
         scored: list[tuple[int, int, BusinessIntent]] = []
+        debug_lines: list[str] = []
         lowered = question.lower()
         for order, intent in enumerate(self.intents):
+            # ----- exclusion by match_none -----
             if any(keyword.lower() in lowered for keyword in intent.match_none):
+                debug_lines.append(
+                    f"  SKIP {intent.intent_id}: match_none exclusion"
+                )
                 continue
+            # ----- exclusion by match_all -----
             if intent.match_all and not all(keyword.lower() in lowered for keyword in intent.match_all):
+                missing = [kw for kw in intent.match_all if kw.lower() not in lowered]
+                debug_lines.append(
+                    f"  SKIP {intent.intent_id}: match_all missing={missing}"
+                )
                 continue
+            # ----- compute hits -----
             hits = sum(1 for keyword in intent.match_any if keyword.lower() in lowered)
+            hit_keywords = [kw for kw in intent.match_any if kw.lower() in lowered]
             example_hits = sum(1 for example in intent.examples if example and example in question)
+            hit_examples = [ex for ex in intent.examples if ex and ex in question]
+            # ----- exclusion by zero hits -----
             if intent.match_any and hits == 0 and example_hits == 0:
+                debug_lines.append(
+                    f"  SKIP {intent.intent_id}: zero hits "
+                    f"(match_any={intent.match_any}, examples={intent.examples})"
+                )
                 continue
+            # ----- score computation -----
             score = intent.priority + hits + (example_hits * 2)
+            confidence = min(0.99, max(0.5, score / 100))
+            distance = round(1.0 - confidence, 4)
+            debug_lines.append(
+                f"  CAND {intent.intent_id}: priority={intent.priority} "
+                f"+ hits={hits}{hit_keywords} + example_hits×2={example_hits * 2}{hit_examples} "
+                f"= score={score} confidence={confidence:.2f} distance={distance}"
+            )
             scored.append((score, -order, intent))
         if not scored:
+            _logger.info(
+                "[LEXICAL] ← %r → NO INTENT MATCHED (%d intents scanned)",
+                question, len(self.intents),
+            )
             return None
+        # ----- sort and pick winner -----
         score, _, intent = max(scored, key=lambda item: (item[0], item[1]))
         confidence = min(0.99, max(0.5, score / 100))
+        distance = round(1.0 - confidence, 4)
+        # Log the winner summary every time; log per-intent details only on first call
+        _logger.info(
+            "[LEXICAL] ← %r → WINNER %s score=%d confidence=%.2f "
+            "distance=%.4f (from %d candidates)",
+            question, intent.intent_id, score, confidence, distance, len(scored),
+        )
+        if self._best_intent_last_question != question:
+            for line in debug_lines:
+                _logger.info(line)
+        self._best_intent_last_question = question
         return intent, round(confidence, 2)
 
     def _extract_slots(self, question: str, intent: BusinessIntent) -> dict[str, Any]:
@@ -724,6 +891,23 @@ class BusinessSemanticIndex:
                 slots["field_like"] = _like_value(field_name)
         if "result_limit" in requested_slots:
             slots["result_limit"] = _extract_result_limit(question, int(slots.get("result_limit") or 10))
+        # -- Department-related slot extraction (LLM-fallback heuristic) --
+        if "parent_dept_name" in requested_slots:
+            match = re.search(r"([\u4e00-\u9fa5]+)(?:下级|下属|子部门)", question)
+            if match:
+                slots["parent_dept_name"] = match.group(1).strip()
+        if "dept_name" in requested_slots:
+            match = re.search(r"([\u4e00-\u9fa5]+)(?=有多少人|多少人|的人数|人数)", question)
+            if match:
+                slots["dept_name"] = match.group(1).strip()
+        if "dept_lvl" in requested_slots and isinstance(slots.get("dept_lvl", None), (int, float)):
+            pass  # slot_defaults already provided a numeric value, keep it
+        elif "dept_lvl" in requested_slots:
+            _dept_level_map = {"二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+            match = re.search(r"各?([二三四五六七八九\d]+)级部门", question)
+            if match:
+                raw = match.group(1)
+                slots["dept_lvl"] = _dept_level_map.get(raw, int(raw) if raw.isdigit() else None)
         if intent.intent_id == "field_explanation":
             match = re.search(
                 r"\b([a-z][a-z0-9_]*)\s*\.\s*([a-z][a-z0-9_]*)\b",
@@ -772,6 +956,16 @@ class BusinessSemanticIndex:
             "heuristic_fast_path",
             {},
         )
+        _log_plan_result(
+            question=question,
+            status=intent.status,
+            intent_id=intent.intent_id,
+            display_name=intent.display_name,
+            slot_source=slot_source,
+            confidence=confidence,
+            vector_distance=round(selected_candidate.distance, 4),
+            elapsed_ms=self._elapsed_ms(started),
+        )
         return self._build_plan(
             intent,
             slots,
@@ -797,12 +991,27 @@ class BusinessSemanticIndex:
                 continue
             normalized_example = re.sub(r"\s+", "", example.strip())
             if normalized_question == normalized_example or example in question:
+                _logger.info(
+                    "[SKIP-LLM] intent=%s exact example match: %r in %r → skip LLM",
+                    intent.intent_id, example, question,
+                )
                 return True
         if selected_candidate.distance <= _FAST_LLM_SKIP_VECTOR_DISTANCE:
             if len(candidates) == 1:
+                _logger.info(
+                    "[SKIP-LLM] intent=%s sole candidate distance=%.4f ≤ %.2f → skip LLM",
+                    intent.intent_id, selected_candidate.distance,
+                    _FAST_LLM_SKIP_VECTOR_DISTANCE,
+                )
                 return True
             second_distance = candidates[1].distance
             if second_distance - selected_candidate.distance >= 0.08:
+                _logger.info(
+                    "[SKIP-LLM] intent=%s distance=%.4f gap=%.4f (vs #2 %s distance=%.4f) ≥ 0.08 → skip LLM",
+                    intent.intent_id, selected_candidate.distance,
+                    round(second_distance - selected_candidate.distance, 4),
+                    candidates[1].intent_id, second_distance,
+                )
                 return True
         lexical = self._lexical_candidate(question)
         if (
@@ -810,7 +1019,15 @@ class BusinessSemanticIndex:
             and lexical.intent_id == intent.intent_id
             and lexical.distance <= _STRONG_LEXICAL_DISTANCE
         ):
+            _logger.info(
+                "[SKIP-LLM] intent=%s strong lexical distance=%.4f ≤ %.2f → skip LLM",
+                intent.intent_id, lexical.distance, _STRONG_LEXICAL_DISTANCE,
+            )
             return True
+        _logger.info(
+            "[SKIP-LLM] intent=%s distance=%.4f no skip condition met → will call LLM",
+            intent.intent_id, selected_candidate.distance,
+        )
         return False
 
     def _heuristic_plan_ready(self, intent: BusinessIntent, slots: dict[str, Any]) -> bool:
@@ -834,13 +1051,17 @@ class BusinessSemanticIndex:
     def _lexical_candidate(self, question: str) -> IntentVectorCandidate | None:
         matched = self._best_intent(question)
         if matched is None:
+            _logger.info("[LEXICAL] ← %r → no keyword match", question)
             return None
         intent, confidence = matched
-        return IntentVectorCandidate(
+        candidate = IntentVectorCandidate(
             intent_id=intent.intent_id,
             distance=round(max(0.0, 1.0 - confidence), 4),
             matched_query="keyword_match",
         )
+        _logger.info("[LEXICAL] ← %r → candidate %s distance=%.4f confidence=%.2f",
+                     question, intent.intent_id, candidate.distance, confidence)
+        return candidate
 
     def _apply_strong_lexical_override(
         self,
@@ -854,15 +1075,35 @@ class BusinessSemanticIndex:
     ) -> tuple[BusinessIntent, IntentVectorCandidate, dict[str, Any], float, str]:
         lexical = self._lexical_candidate(question)
         if lexical is None or lexical.distance > _STRONG_LEXICAL_DISTANCE:
+            _logger.info(
+                "[OVERRIDE] no lexical intent or distance > %.2f (lexical=%s, dist=%.4f) → keep %s",
+                _STRONG_LEXICAL_DISTANCE,
+                lexical.intent_id if lexical else None,
+                lexical.distance if lexical else None,
+                intent.intent_id,
+            )
             return intent, selected_candidate, slots, confidence, slot_source
 
         lexical_intent = self._intents_by_id.get(lexical.intent_id)
         if lexical_intent is None or lexical_intent.status not in {"executable", "metadata"}:
+            _logger.info(
+                "[OVERRIDE] lexical intent %s not available or not executable/metadata → keep %s",
+                lexical.intent_id, intent.intent_id,
+            )
             return intent, selected_candidate, slots, confidence, slot_source
 
         if intent.intent_id == lexical_intent.intent_id and intent.status in {"executable", "metadata"}:
+            _logger.info(
+                "[OVERRIDE] same intent %s (LLM=%s, keyword=%s) → no override",
+                intent.intent_id, intent.intent_id, lexical_intent.intent_id,
+            )
             return intent, selected_candidate, slots, confidence, slot_source
 
+        _logger.info(
+            "[OVERRIDE] STRONG OVERRIDE: LLM selected %s but keyword says %s (distance=%.4f ≤ %.2f) → overriding",
+            intent.intent_id, lexical_intent.intent_id,
+            lexical.distance, _STRONG_LEXICAL_DISTANCE,
+        )
         merged_slots = self._complete_slots(
             question,
             lexical_intent,
@@ -896,6 +1137,31 @@ class BusinessSemanticIndex:
 
     def _elapsed_ms(self, started: float) -> int:
         return int((time.monotonic() - started) * 1000)
+
+
+def _log_plan_result(
+    *,
+    question: str,
+    status: str,
+    intent_id: str | None = None,
+    display_name: str | None = None,
+    slot_source: str = "",
+    confidence: float = 0.0,
+    vector_distance: float | None = None,
+    elapsed_ms: int = 0,
+    reason: str | None = None,
+) -> None:
+    """统一的语义规划结果日志，每次提问输出一行。"""
+    llm_called = slot_source.startswith("llm") if slot_source else False
+    intent_str = f"{intent_id}({display_name})" if intent_id else "-"
+    dist_str = f"{vector_distance:.3f}" if vector_distance is not None else "-"
+    extra = f" reason={reason}" if reason else ""
+    print(
+        f"[PLAN] ← {question!r} → intent={intent_str} status={status} "
+        f"llm={llm_called} source={slot_source} conf={confidence:.2f} "
+        f"dist={dist_str} t={elapsed_ms}ms{extra}",
+        flush=True,
+    )
 
 
 def _question_has_month_scope(question: str) -> bool:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -10,6 +11,8 @@ from typing import Any
 import httpx
 
 from .config import LlmSettings
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,29 +44,53 @@ class LlmSlotExtractor:
             return None
         system_prompt = _system_prompt()
         user_prompt = _user_prompt(question, candidates, history)
+        _logger.info("[LLM-SLOT] question=%r, candidates=%s", question, json.dumps(
+            [{k: v for k, v in c.items() if k in ("id", "allowed_slots", "required_slots")} for c in candidates],
+            ensure_ascii=False))
+        print(f"\n[LLM-SLOT] ======== LLM Slot Extraction ========", flush=True)
+        print(f"[LLM-SLOT] question: {question}", flush=True)
+        print(f"[LLM-SLOT] user_prompt:\n{user_prompt}\n", flush=True)
         started = time.monotonic()
         try:
             if self.settings.transport == "anthropic":
                 content = self._generate_with_anthropic(system_prompt, user_prompt)
             else:
                 content = self._generate_with_openai(system_prompt, user_prompt)
+            _logger.info("[LLM-SLOT] raw_response=%s", content)
+            print(f"[LLM-SLOT] RAW LLM RESPONSE:\n{content}\n", flush=True)
             payload = _parse_json(content)
-        except Exception:
+        except Exception as exc:
+            _logger.warning("[LLM-SLOT] extraction failed: %s", exc)
+            print(f"[LLM-SLOT] EXTRACTION FAILED: {exc}", flush=True)
+            import traceback; traceback.print_exc()
             return None
+        _logger.info("[LLM-SLOT] parsed_payload=%s", json.dumps(payload, ensure_ascii=False))
+        print(f"[LLM-SLOT] PARSED JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n", flush=True)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         decision = _string(payload.get("decision")).lower()
         if decision not in {"select", "fallback"}:
+            _logger.warning("[LLM-SLOT] invalid decision=%r", decision)
+            print(f"[LLM-SLOT] INVALID decision={decision!r}", flush=True)
             return None
         intent_id = _string(payload.get("intent_id")) or None
         if decision == "select" and (not intent_id or intent_id not in candidate_map):
+            _logger.warning("[LLM-SLOT] intent_id=%r not in candidate_map keys=%s", intent_id, list(candidate_map))
+            print(f"[LLM-SLOT] intent_id={intent_id!r} not in {list(candidate_map)}", flush=True)
             return None
         slots = payload.get("slots")
         allowed_slots = _allowed_slots(candidate_map.get(intent_id, {})) if intent_id else set()
+        filtered = _filtered_slots(slots, allowed_slots)
+        _logger.info("[LLM-SLOT] allowed_slots=%s, raw_slots=%s, filtered_slots=%s",
+                     allowed_slots, slots, filtered)
+        print(f"[LLM-SLOT] allowed_slots={allowed_slots}", flush=True)
+        print(f"[LLM-SLOT] raw_slots   ={slots}", flush=True)
+        print(f"[LLM-SLOT] filtered    ={filtered}", flush=True)
+        print(f"[LLM-SLOT] ======== End LLM Slot Extraction ========\n", flush=True)
         return SlotExtractionResult(
             decision=decision,
             intent_id=intent_id,
             confidence=_confidence(payload.get("confidence")),
-            slots=_filtered_slots(slots, allowed_slots),
+            slots=filtered,
             reason=_string(payload.get("reason")) or None,
             source="llm",
             elapsed_ms=elapsed_ms,
@@ -181,6 +208,8 @@ def _compact_history(history: list[dict[str, object]]) -> list[dict[str, str]]:
 
 def _parse_json(content: str) -> Mapping[str, Any]:
     stripped = content.strip()
+    # Strip <think>...</think> tags used by reasoning models (e.g. Qwen, DeepSeek)
+    stripped = re.sub(r"<think>.*?</think>", "", stripped, flags=re.DOTALL).strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?", "", stripped).strip()
         stripped = re.sub(r"```$", "", stripped).strip()

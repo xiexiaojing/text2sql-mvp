@@ -47,3 +47,4 @@ tables:
       - {name: sys_dept_UN, columns: [dept_id]}                       # dept_id 唯一索引
     joins:                            # 允许的 JOIN 路径
       - {to_table: sys_user, on: sys_dept.dept_id = sys_user.dept_id}  # 部门-用户
+      - {to_table: sys_dept, on: sys_dept.parent_id = sys_dept.dept_id}  # 部门自关联（查父子关系）

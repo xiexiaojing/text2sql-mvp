@@ -26,6 +26,9 @@ esac
     rm -f app.pid
     
     if [ "$IS_WINDOWS" -eq 1 ]; then
+
+        # cmd //c "taskkill /F /IM python.exe" 2>&1;         
+        # echo "python 进程 killed"
         # Windows 环境：通过 PowerShell 查找并终止 uvicorn 相关的 Python 进程
         # 使用 PowerShell 的 Get-Process 和 Where-Object 过滤包含 "uvicorn" 的进程
         # 这种方法可以查看完整的命令行参数，比 tasklist 更可靠

@@ -1,0 +1,405 @@
+version: 1                            # 配置文件版本号
+notes:                                # 配置说明备注列表
+  - 基于真实业务（docs/wiki）配置的意图与 SQL 模板，覆盖项目/采购/供应商/询价/用户/部门/会议/知讯等核心域。  # 真实业务语义配置
+  - 这些表无 tenant_id，SQL 模板中通过 WHERE del_flag = 0 过滤逻辑删除数据。  # 逻辑删除说明
+  - 仅 status=executable 且有 sql_templates 条目的意图才会生成 SQL；新增业务问题请在此添加意图与对应模板。  # 扩展指引
+
+entities:                             # 实体定义（将业务实体映射到物理表）
+  Project:                            # 项目实体
+    tables: [project]                 # 关联物理表
+  PurchaseOrder:                      # 采购单实体
+    tables: [purchase_order]          # 关联物理表
+  PurchaseItem:                       # 采购物品实体
+    tables: [purchase_item]           # 关联物理表
+  Supplier:                           # 供应商实体
+    tables: [caigou_gongyingshang]    # 关联物理表
+  Inquiry:                            # 询价单实体
+    tables: [inquiry]                 # 关联物理表
+  InquirySupplier:                    # 询价供应商实体
+    tables: [inquiry_supplier]        # 关联物理表
+  User:                               # 用户实体
+    tables: [sys_user]                # 关联物理表
+  Dept:                               # 部门实体
+    tables: [sys_dept]                # 关联物理表
+  Conference:                         # 会议实体
+    tables: [conference]              # 关联物理表
+  News:                               # 知讯实体
+    tables: [kno_news]                # 关联物理表
+
+intents:                              # 业务意图列表（多阶段匹配引擎的核心配置）
+  # ==================== 项目域 ====================
+  - id: project_count                 # 意图唯一标识
+    display_name: 项目总数            # 意图显示名称
+    status: executable                # 意图状态：executable=可执行
+    priority: 90                      # 匹配优先级
+    match: {all: ["项目"], any: ["总数", "有多少", "数量", "多少", "几个"]}  # 关键词匹配规则
+    examples: ["项目总数是多少", "有多少个项目", "项目数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计项目总数", "项目一共有多少"]  # 语义查询变体
+    ontology_refs: [Project]          # 关联实体
+    physical_tables: [project]        # 实际物理表
+    output_type: scalar_count         # 输出类型：scalar_count=标量计数
+    template: project_count           # SQL 模板名
+
+  # ==================== 采购域 ====================
+  - id: purchase_order_count          # 意图唯一标识
+    display_name: 采购单总数          # 意图显示名称
+    status: executable                # 意图状态
+    priority: 91                      # 匹配优先级
+    match: {all: ["采购"], any: ["总数", "有多少", "数量", "多少", "几笔", "笔数"]}  # 关键词匹配规则
+    examples: ["采购单总数是多少", "有多少笔采购单", "采购单数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计采购单总数", "采购单一共有多少"]  # 语义查询变体
+    ontology_refs: [PurchaseOrder]    # 关联实体
+    physical_tables: [purchase_order] # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: purchase_order_count    # SQL 模板名
+
+  - id: purchase_order_by_project     # 意图唯一标识
+    display_name: 采购单按项目统计    # 意图显示名称
+    status: executable                # 意图状态
+    priority: 89                      # 匹配优先级
+    match: {all: ["采购"], any: ["按项目", "项目统计", "项目分布", "各项目"]}  # 关键词匹配规则
+    examples: ["采购单按项目统计", "各项目的采购单数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按项目统计采购单", "各项目采购单数"]  # 语义查询变体
+    ontology_refs: [PurchaseOrder]    # 关联实体
+    physical_tables: [purchase_order] # 实际物理表
+    output_type: grouped_count        # 输出类型：grouped_count=分组计数
+    template: purchase_order_by_project  # SQL 模板名
+
+  - id: purchase_order_by_supplier_rank  # 意图唯一标识
+    display_name: 采购单按供应商排名  # 意图显示名称
+    status: executable                # 意图状态
+    priority: 92                      # 匹配优先级
+    match: {all: ["采购"], any: ["供应商", "排名", "排行", "TOP", "top"]}  # 关键词匹配规则
+    examples: ["采购单按供应商排名", "采购单供应商TOP10", "哪个供应商采购单最多"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按供应商统计采购单", "供应商采购单排行"]  # 语义查询变体
+    ontology_refs: [PurchaseOrder, Supplier]  # 关联实体（跨表 JOIN）
+    optional_slots: [result_limit]    # 可选槽位
+    physical_tables: [purchase_order, caigou_gongyingshang]  # 实际物理表（多表 JOIN）
+    output_type: grouped_metric       # 输出类型：grouped_metric=分组指标聚合
+    template: purchase_order_by_supplier_rank  # SQL 模板名
+    slot_defaults: {result_limit: 10} # 槽位默认值
+
+  # ==================== 供应商域 ====================
+  - id: supplier_count                # 意图唯一标识
+    display_name: 供应商总数          # 意图显示名称
+    status: executable                # 意图状态
+    priority: 90                      # 匹配优先级
+    match: {all: ["供应商"], any: ["总数", "有多少", "数量", "多少", "几家"]}  # 关键词匹配规则
+    examples: ["供应商总数是多少", "有多少个供应商", "供应商数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计供应商总数", "供应商一共有多少"]  # 语义查询变体
+    ontology_refs: [Supplier]         # 关联实体
+    physical_tables: [caigou_gongyingshang]  # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: supplier_count          # SQL 模板名
+
+  - id: supplier_by_status            # 意图唯一标识
+    display_name: 供应商按状态统计    # 意图显示名称
+    status: executable                # 意图状态
+    priority: 88                      # 匹配优先级
+    match: {all: ["供应商"], any: ["按状态", "状态统计", "状态分布", "各状态"]}  # 关键词匹配规则
+    examples: ["供应商按状态统计", "各状态供应商数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按状态统计供应商", "供应商状态分布"]  # 语义查询变体
+    ontology_refs: [Supplier]         # 关联实体
+    physical_tables: [caigou_gongyingshang]  # 实际物理表
+    output_type: grouped_count        # 输出类型
+    template: supplier_by_status      # SQL 模板名
+
+  - id: supplier_by_dengji            # 意图唯一标识
+    display_name: 供应商按等级统计    # 意图显示名称
+    status: executable                # 意图状态
+    priority: 87                      # 匹配优先级
+    match: {all: ["供应商"], any: ["按等级", "等级统计", "等级分布", "各等级"]}  # 关键词匹配规则
+    examples: ["供应商按等级统计", "各等级供应商数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按等级统计供应商", "供应商等级分布"]  # 语义查询变体
+    ontology_refs: [Supplier]         # 关联实体
+    physical_tables: [caigou_gongyingshang]  # 实际物理表
+    output_type: grouped_count        # 输出类型
+    template: supplier_by_dengji      # SQL 模板名
+
+  - id: supplier_register_recent      # 意图唯一标识
+    display_name: 近7天新增供应商     # 意图显示名称
+    status: executable                # 意图状态
+    priority: 93                      # 匹配优先级（高于 supplier_count，确保时间相关问句命中此意图）
+    match: {all: ["供应商"], any: ["近7天", "近七天", "最近一周", "新增", "新注册"]}  # 关键词匹配规则
+    examples: ["近7天新增供应商多少", "最近一周新注册供应商数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["近一周供应商增长", "最近7天供应商新增"]  # 语义查询变体
+    ontology_refs: [Supplier]         # 关联实体
+    physical_tables: [caigou_gongyingshang]  # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: supplier_register_recent  # SQL 模板名
+
+  # ==================== 询价域 ====================
+  - id: inquiry_count                 # 意图唯一标识
+    display_name: 询价单总数          # 意图显示名称
+    status: executable                # 意图状态
+    priority: 89                      # 匹配优先级
+    match: {all: ["询价"], any: ["总数", "有多少", "数量", "多少", "几单"]}  # 关键词匹配规则
+    examples: ["询价单总数是多少", "有多少个询价单", "询价单数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计询价单总数", "询价单一共有多少"]  # 语义查询变体
+    ontology_refs: [Inquiry]          # 关联实体
+    physical_tables: [inquiry]        # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: inquiry_count           # SQL 模板名
+
+  - id: inquiry_by_status             # 意图唯一标识
+    display_name: 询价单按状态统计    # 意图显示名称
+    status: executable                # 意图状态
+    priority: 87                      # 匹配优先级
+    match: {all: ["询价"], any: ["按状态", "状态统计", "状态分布", "各状态"]}  # 关键词匹配规则
+    examples: ["询价单按状态统计", "各状态询价单数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按状态统计询价单", "询价单状态分布"]  # 语义查询变体
+    ontology_refs: [Inquiry]          # 关联实体
+    physical_tables: [inquiry]        # 实际物理表
+    output_type: grouped_count        # 输出类型
+    template: inquiry_by_status       # SQL 模板名
+
+  # ==================== 用户/部门域 ====================
+  - id: user_count                    # 意图唯一标识
+    display_name: 用户总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 88                      # 匹配优先级
+    match: {all: ["用户"], any: ["总数", "有多少", "数量", "多少", "几人"]}  # 关键词匹配规则
+    examples: ["用户总数是多少", "有多少个用户", "用户数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计用户总数", "用户一共有多少"]  # 语义查询变体
+    ontology_refs: [User]             # 关联实体
+    physical_tables: [sys_user]       # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: user_count              # SQL 模板名
+
+  - id: user_by_dept                  # 意图唯一标识
+    display_name: 用户按部门统计      # 意图显示名称
+    status: executable                # 意图状态
+    priority: 86                      # 匹配优先级
+    match: {all: ["用户"], any: ["按部门", "部门统计", "部门分布", "各部门"]}  # 关键词匹配规则
+    examples: ["用户按部门统计", "各部门用户数量", "各部门有多少用户"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按部门统计用户", "用户部门分布"]  # 语义查询变体
+    ontology_refs: [User, Dept]       # 关联实体（跨表 JOIN）
+    physical_tables: [sys_user, sys_dept]  # 实际物理表（多表 JOIN）
+    output_type: grouped_count        # 输出类型
+    template: user_by_dept            # SQL 模板名
+
+  - id: dept_count                    # 意图唯一标识
+    display_name: 部门总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 85                      # 匹配优先级
+    match: {all: ["部门"], any: ["总数", "有多少", "数量", "多少", "几个"]}  # 关键词匹配规则
+    examples: ["部门总数是多少", "有多少个部门", "部门数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计部门总数", "部门一共有多少"]  # 语义查询变体
+    ontology_refs: [Dept]             # 关联实体
+    physical_tables: [sys_dept]       # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: dept_count              # SQL 模板名
+
+  # ==================== 会议域 ====================
+  - id: conference_count              # 意图唯一标识
+    display_name: 会议总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 87                      # 匹配优先级
+    match: {all: ["会议"], any: ["总数", "有多少", "数量", "多少", "几场"]}  # 关键词匹配规则
+    examples: ["会议总数是多少", "有多少场会议", "会议数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计会议总数", "会议一共有多少"]  # 语义查询变体
+    ontology_refs: [Conference]       # 关联实体
+    physical_tables: [conference]     # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: conference_count        # SQL 模板名
+
+  - id: conference_by_status          # 意图唯一标识
+    display_name: 会议按状态统计      # 意图显示名称
+    status: executable                # 意图状态
+    priority: 85                      # 匹配优先级
+    match: {all: ["会议"], any: ["按状态", "状态统计", "状态分布", "各状态"]}  # 关键词匹配规则
+    examples: ["会议按状态统计", "各状态会议数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按状态统计会议", "会议状态分布"]  # 语义查询变体
+    ontology_refs: [Conference]       # 关联实体
+    physical_tables: [conference]     # 实际物理表
+    output_type: grouped_count        # 输出类型
+    template: conference_by_status    # SQL 模板名
+
+  # ==================== 知讯域 ====================
+  - id: news_count                    # 意图唯一标识
+    display_name: 知讯总数            # 意图显示名称
+    status: executable                # 意图状态
+    priority: 86                      # 匹配优先级
+    match: {any: ["知讯", "通知", "公告", "文档制度"]}  # 关键词匹配规则（任一命中即可）
+    examples: ["知讯总数是多少", "有多少条通知", "公告数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["统计知讯总数", "通知一共有多少"]  # 语义查询变体
+    ontology_refs: [News]             # 关联实体
+    physical_tables: [kno_news]       # 实际物理表
+    output_type: scalar_count         # 输出类型
+    template: news_count              # SQL 模板名
+
+  - id: news_by_status                # 意图唯一标识
+    display_name: 知讯按状态统计      # 意图显示名称
+    status: executable                # 意图状态
+    priority: 87                      # 匹配优先级（高于 news_count，确保含"状态"的问句命中此意图）
+    match: {all: ["状态"], any: ["知讯", "通知", "公告", "文档制度"]}  # 关键词匹配规则（必须含"状态"，且知讯类任一命中）
+    examples: ["知讯按状态统计", "各状态通知数量"]  # 示例问句
+    semantic:                         # 语义扩展配置
+      queries: ["按状态统计知讯", "通知状态分布"]  # 语义查询变体
+    ontology_refs: [News]             # 关联实体
+    physical_tables: [kno_news]       # 实际物理表
+    output_type: grouped_count        # 输出类型
+    template: news_by_status          # SQL 模板名
+
+sql_templates:                        # SQL 模板定义（参数化 SQL，运行时 SqlPolicy 自动加 LIMIT，模板内通过 del_flag=0 过滤逻辑删除）
+  # ==================== 项目域 ====================
+  project_count:                      # 模板名：项目总数
+    plan: 统计未删除的项目总数。      # 模板用途说明
+    sql: >                            # SQL 语句（标量计数，ensure_limit 不加 LIMIT）
+      SELECT COUNT(*) AS total
+      FROM project p
+      WHERE p.del_flag = 0
+
+  # ==================== 采购域 ====================
+  purchase_order_count:               # 模板名：采购单总数
+    plan: 统计未删除的采购单总数。    # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM purchase_order po
+      WHERE po.del_flag = 0
+
+  purchase_order_by_project:          # 模板名：采购单按项目统计
+    plan: 按项目编号分组统计采购单数量。  # 模板用途说明
+    sql: >                            # SQL 语句（分组计数，适合柱状图）
+      SELECT po.project_code AS project_code, COUNT(*) AS total
+      FROM purchase_order po
+      WHERE po.del_flag = 0
+      GROUP BY po.project_code
+      ORDER BY total DESC
+
+  purchase_order_by_supplier_rank:    # 模板名：采购单按供应商排名
+    plan: 按供应商分组统计采购单数量并排名。  # 模板用途说明
+    params: {result_limit: result_limit}  # 参数映射（LIMIT 参数化）
+    sql: >                            # SQL 语句（JOIN 供应商表，按采购单数降序排名）
+      SELECT g.gys_zhuti_name AS supplier_name, COUNT(po.id) AS total
+      FROM purchase_order po
+      JOIN caigou_gongyingshang g ON po.supplier_id = g.id
+      WHERE po.del_flag = 0 AND g.del_flag = 0
+      GROUP BY g.gys_zhuti_name
+      ORDER BY total DESC
+      LIMIT %(result_limit)s
+
+  # ==================== 供应商域 ====================
+  supplier_count:                     # 模板名：供应商总数
+    plan: 统计未删除的供应商总数。    # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM caigou_gongyingshang g
+      WHERE g.del_flag = 0
+
+  supplier_by_status:                 # 模板名：供应商按状态统计
+    plan: 按状态分组统计供应商数量。  # 模板用途说明
+    sql: >                            # SQL 语句（状态：1无效/2待填写/3已提交/4注册中/5修改审批中/6等级变更中/7有效）
+      SELECT g.status AS status_value, COUNT(*) AS total
+      FROM caigou_gongyingshang g
+      WHERE g.del_flag = 0
+      GROUP BY g.status
+      ORDER BY total DESC
+
+  supplier_by_dengji:                 # 模板名：供应商按等级统计
+    plan: 按等级分组统计供应商数量。  # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT g.dengji AS dengji_value, COUNT(*) AS total
+      FROM caigou_gongyingshang g
+      WHERE g.del_flag = 0
+      GROUP BY g.dengji
+      ORDER BY total DESC
+
+  supplier_register_recent:           # 模板名：近7天新增供应商
+    plan: 统计近7天新增的未删除供应商数量。  # 模板用途说明
+    sql: >                            # SQL 语句（按 create_time 过滤近7天）
+      SELECT COUNT(*) AS total
+      FROM caigou_gongyingshang g
+      WHERE g.del_flag = 0 AND g.create_time >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)
+
+  # ==================== 询价域 ====================
+  inquiry_count:                      # 模板名：询价单总数
+    plan: 统计未删除的询价单总数。    # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM inquiry i
+      WHERE i.del_flag = 0
+
+  inquiry_by_status:                  # 模板名：询价单按状态统计
+    plan: 按状态分组统计询价单数量。  # 模板用途说明
+    sql: >                            # SQL 语句（状态：1草稿/2未开始/3报价进行中/4已结束/5已终止）
+      SELECT i.status AS status_value, COUNT(*) AS total
+      FROM inquiry i
+      WHERE i.del_flag = 0
+      GROUP BY i.status
+      ORDER BY total DESC
+
+  # ==================== 用户/部门域 ====================
+  user_count:                         # 模板名：用户总数
+    plan: 统计未删除的用户总数。      # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM sys_user u
+      WHERE u.del_flag = 0
+
+  user_by_dept:                       # 模板名：用户按部门统计
+    plan: 按部门分组统计用户数量（JOIN 部门表取部门名称）。  # 模板用途说明
+    sql: >                            # SQL 语句（JOIN sys_dept，按部门名称分组）
+      SELECT d.dept_name AS dept_name, COUNT(*) AS total
+      FROM sys_user u
+      JOIN sys_dept d ON u.dept_id = d.dept_id
+      WHERE u.del_flag = 0 AND d.del_flag = 0
+      GROUP BY d.dept_name
+      ORDER BY total DESC
+
+  dept_count:                         # 模板名：部门总数
+    plan: 统计未删除的部门总数。      # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM sys_dept d
+      WHERE d.del_flag = 0
+
+  # ==================== 会议域 ====================
+  conference_count:                   # 模板名：会议总数
+    plan: 统计未删除的会议总数。      # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM conference c
+      WHERE c.del_flag = 0
+
+  conference_by_status:               # 模板名：会议按状态统计
+    plan: 按状态分组统计会议数量。    # 模板用途说明
+    sql: >                            # SQL 语句（状态：1正常/2已取消/3结束/4审批中）
+      SELECT c.status AS status_value, COUNT(*) AS total
+      FROM conference c
+      WHERE c.del_flag = 0
+      GROUP BY c.status
+      ORDER BY total DESC
+
+  # ==================== 知讯域 ====================
+  news_count:                         # 模板名：知讯总数
+    plan: 统计未删除的知讯/通知/公告总数。  # 模板用途说明
+    sql: >                            # SQL 语句
+      SELECT COUNT(*) AS total
+      FROM kno_news n
+      WHERE n.del_flag = 0
+
+  news_by_status:                     # 模板名：知讯按状态统计
+    plan: 按发布状态分组统计知讯数量。  # 模板用途说明
+    sql: >                            # SQL 语句（状态：1草稿/2待发布/3已发布）
+      SELECT n.status AS status_value, COUNT(*) AS total
+      FROM kno_news n
+      WHERE n.del_flag = 0
+      GROUP BY n.status
+      ORDER BY total DESC
