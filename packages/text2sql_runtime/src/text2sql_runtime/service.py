@@ -93,7 +93,7 @@ class Text2SqlService:
         entity_labels = EntityColumnLabelIndex.from_business_semantics_path(
             settings.project_root / "configs" / "business_semantics.yaml",
         )
-        self.formatter = ResultFormatter(catalog, entity_labels)
+        self.formatter = ResultFormatter(catalog, entity_labels, settings.field_encryption)
 
     @classmethod
     def from_project_root(cls, project_root: Path | None = None) -> "Text2SqlService":

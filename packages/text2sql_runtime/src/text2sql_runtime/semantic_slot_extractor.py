@@ -123,7 +123,7 @@ class LlmSlotExtractor:
 
 def _system_prompt() -> str:
     return (
-        "你是社区业务 Text-to-SQL 的语义规划器。只返回 JSON，不要解释。"
+        "你是业务 Text-to-SQL 的语义规划器。只返回 JSON，不要解释。"
         "你的任务是在 candidate_intents 中选择一个最匹配用户问题的 intent，并从用户问题中抽取槽位。"
         "禁止选择候选之外的 intent，禁止编写 SQL，禁止猜测问题中没有提供的业务事实。"
         "如果候选都不能覆盖问题，返回 decision=fallback。"

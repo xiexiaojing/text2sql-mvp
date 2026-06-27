@@ -13,7 +13,7 @@ from .rejection_reasons import UNCONFIGURED_SEMANTIC_REASON
 from .semantic_slot_extractor import LlmSlotExtractor, SlotExtractionResult
 from .semantic_slots import computed_values, derive_slots, extract_slots
 from .config import FieldEncryptionSettings, IntentRoutingSettings, IntentVectorSettings, LlmSettings, load_yaml
-from .field_encryption import CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON, encrypt_sensitive_query_params
+from .field_encryption import encrypt_sensitive_query_params
 
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 OPTIONAL_BLOCK_RE = re.compile(r"\[\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*?)\]\]", re.DOTALL)
@@ -410,24 +410,9 @@ class BusinessSemanticIndex:
                 reason = "请说明要查询哪个字段，例如：table_name.column_name。"
         elif status == "metadata":
             pass
-        elif intent.intent_id == "resident_card_lookup" and status == "executable":
-            if all(_empty(slots.get(name)) for name in ("card_no", "card_prefix", "card_suffix")):
-                status = "needs_clarification"
-                reason = "缺少必要条件：card_no"
-            elif self.field_encryption.active and (
-                not _empty(slots.get("card_prefix")) or not _empty(slots.get("card_suffix"))
-            ):
-                status = "needs_clarification"
-                reason = CARD_ENCRYPTED_PARTIAL_LOOKUP_REASON
         elif status == "executable" and missing_slots:
             status = "needs_clarification"
-            from .disambiguation import missing_slot_clarification_reason
-
-            clarify_reason = missing_slot_clarification_reason(question, intent.intent_id, missing_slots)
-            if clarify_reason:
-                reason = clarify_reason
-            else:
-                reason = f"缺少必要条件：{', '.join(missing_slots)}"
+            reason = f"缺少必要条件：{', '.join(missing_slots)}"
         elif status == "executable" and not intent.template_id:
             status = "needs_mapping"
             reason = "该意图缺少可执行 SQL 模板。"
@@ -648,6 +633,15 @@ class BusinessSemanticIndex:
             example_hits = sum(1 for example in intent.examples if example and example in question)
             if intent.match_any and hits == 0 and example_hits == 0:
                 continue
+            if intent.match_any and not intent.match_all:
+                if example_hits == 0 and hits < self.routing.min_lexical_keyword_hits:
+                    long_hits = sum(
+                        1
+                        for keyword in intent.match_any
+                        if len(keyword) >= 5 and keyword.lower() in lowered
+                    )
+                    if long_hits == 0:
+                        continue
             score = intent.priority + hits + (example_hits * 2)
             scored.append((score, -order, intent))
         if not scored:
