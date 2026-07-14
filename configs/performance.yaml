@@ -36,6 +36,7 @@ allowed_functions:                    # SQL 中允许使用的函数白名单（
   - current_date                      # 当前日期
   - interval                          # 时间间隔关键字
   - day                               # 提取日
+  - find_in_set                       # 查找字符串在集合中的位置
 cache:                                # 结果缓存配置
   enabled: false                      # 是否启用结果缓存
   ttl_seconds: 300                    # 缓存有效期（秒）

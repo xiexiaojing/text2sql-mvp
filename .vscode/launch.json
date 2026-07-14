@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug FastAPI (text2sql-mvp)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "text2sql_api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8777",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "apps/api/src;packages/text2sql_runtime/src",
+                "PYTHONIOENCODING": "utf-8"
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "variablePresentation": {
+                "function": "hide",
+                "special": "hide"
+            }
+        }
+    ]
+}

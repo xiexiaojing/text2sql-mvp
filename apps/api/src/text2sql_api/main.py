@@ -212,6 +212,42 @@ def chat() -> str:
     const sideSend = document.getElementById("sideSend");
     const conversationHistory = [];
     const chartInstances = new Map();
+    const MAX_HISTORY = 5;
+    const questionHistory = [];
+    let historyIndex = -1;
+    let draftValue = "";
+
+    function rememberQuestion(text) {{
+      if (text && questionHistory[questionHistory.length - 1] !== text) {{
+        questionHistory.push(text);
+        if (questionHistory.length > MAX_HISTORY) questionHistory.shift();
+      }}
+      historyIndex = -1;
+      draftValue = question.value;
+    }}
+
+    function browseHistory(direction) {{
+      if (questionHistory.length === 0) return;
+      if (direction < 0) {{
+        if (historyIndex === -1) {{
+          draftValue = question.value;
+          historyIndex = questionHistory.length - 1;
+        }} else if (historyIndex > 0) {{
+          historyIndex -= 1;
+        }}
+      }} else {{
+        if (historyIndex === -1) return;
+        if (historyIndex < questionHistory.length - 1) {{
+          historyIndex += 1;
+        }} else {{
+          historyIndex = -1;
+          question.value = draftValue;
+          return;
+        }}
+      }}
+      question.value = questionHistory[historyIndex];
+      question.setSelectionRange(question.value.length, question.value.length);
+    }}
     domainId.value = domainId.value || defaultDomain;
 
     async function loadHealth() {{
@@ -225,12 +261,21 @@ def chat() -> str:
       }}
     }}
 
+    function isNearBottom(el, threshold = 40) {{
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    }}
+
+    function scrollToBottom(el) {{
+      el.scrollTop = el.scrollHeight;
+    }}
+
     function addMessage(role, html, extraClass = "") {{
+      const wasAtBottom = isNearBottom(messages);
       const node = document.createElement("div");
       node.className = `msg ${{role}} ${{extraClass}}`;
       node.innerHTML = html;
       messages.appendChild(node);
-      messages.scrollTop = messages.scrollHeight;
+      if (wasAtBottom) scrollToBottom(messages);
       return node;
     }}
 
@@ -276,7 +321,7 @@ def chat() -> str:
       return `<div id="${{chartId}}" class="echarts-container"></div>`;
     }}
 
-    function renderEchartsChart(containerId, option) {{
+    function renderEchartsChart(containerId, option, stickToBottom = false) {{
       setTimeout(() => {{
         const container = document.getElementById(containerId);
         if (!container) return;
@@ -290,6 +335,8 @@ def chat() -> str:
         chart.setOption(option);
         chartInstances.set(containerId, chart);
         
+        if (stickToBottom) scrollToBottom(messages);
+        
         // Handle resize
         window.addEventListener("resize", () => {{
           chart.resize();
@@ -297,7 +344,7 @@ def chat() -> str:
       }}, 100);
     }}
 
-    function renderResult(data) {{
+    function renderResult(data, stickToBottom = false) {{
       const parts = [];
       parts.push(`<strong>${{escapeHtml(data.status)}}</strong>`);
       
@@ -317,7 +364,7 @@ def chat() -> str:
         const chartId = `chart-${{Date.now()}}-${{Math.random().toString(36).substr(2, 9)}}`;
         parts.push(createChartContainer(chartId));
         // Schedule chart rendering after DOM update
-        setTimeout(() => renderEchartsChart(chartId, echartsOption), 0);
+        setTimeout(() => renderEchartsChart(chartId, echartsOption, stickToBottom), 0);
       }}
       
       if (data.generatedSql) parts.push(`<pre>${{escapeHtml(data.generatedSql)}}</pre>`);
@@ -408,6 +455,7 @@ def chat() -> str:
       }}
       addMessage("user", escapeHtml(text));
       question.value = "";
+      rememberQuestion(text);
       send.disabled = true;
       sideSend.disabled = true;
       const pending = addMessage("assistant", "查询中...");
@@ -425,8 +473,10 @@ def chat() -> str:
           }})
         }});
         const data = await response.json();
-        pending.innerHTML = response.ok ? renderResult(data) : escapeHtml(JSON.stringify(data, null, 2));
+        const stickToBottom = isNearBottom(messages);
+        pending.innerHTML = response.ok ? renderResult(data, stickToBottom) : escapeHtml(JSON.stringify(data, null, 2));
         renderInteractionLogs(data, text);
+        if (stickToBottom) scrollToBottom(messages);
         if (!response.ok) pending.classList.add("error");
         conversationHistory.push({{role: "user", content: text}});
         conversationHistory.push({{
@@ -453,7 +503,20 @@ def chat() -> str:
     send.addEventListener("click", submitQuestion);
     sideSend.addEventListener("click", submitQuestion);
     question.addEventListener("keydown", (event) => {{
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submitQuestion();
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {{
+        submitQuestion();
+        return;
+      }}
+      if (event.key === "ArrowUp" && question.value.indexOf(String.fromCharCode(10)) === -1) {{
+        event.preventDefault();
+        browseHistory(-1);
+        return;
+      }}
+      if (event.key === "ArrowDown" && question.value.indexOf(String.fromCharCode(10)) === -1) {{
+        event.preventDefault();
+        browseHistory(1);
+        return;
+      }}
     }});
     loadHealth();
   </script>

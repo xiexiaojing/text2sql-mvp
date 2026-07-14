@@ -57,15 +57,15 @@ class LlmSlotExtractor:
             else:
                 content = self._generate_with_openai(system_prompt, user_prompt)
             _logger.info("[LLM-SLOT] raw_response=%s", content)
-            print(f"[LLM-SLOT] RAW LLM RESPONSE:\n{content}\n", flush=True)
+            # print(f"[LLM-SLOT] RAW LLM RESPONSE:\n{content}\n", flush=True)
             payload = _parse_json(content)
         except Exception as exc:
             _logger.warning("[LLM-SLOT] extraction failed: %s", exc)
             print(f"[LLM-SLOT] EXTRACTION FAILED: {exc}", flush=True)
             import traceback; traceback.print_exc()
             return None
-        _logger.info("[LLM-SLOT] parsed_payload=%s", json.dumps(payload, ensure_ascii=False))
-        print(f"[LLM-SLOT] PARSED JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n", flush=True)
+        # _logger.info("[LLM-SLOT] parsed_payload=%s", json.dumps(payload, ensure_ascii=False))
+        # print(f"[LLM-SLOT] PARSED JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n", flush=True)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         decision = _string(payload.get("decision")).lower()
         if decision not in {"select", "fallback"}:
@@ -80,8 +80,7 @@ class LlmSlotExtractor:
         slots = payload.get("slots")
         allowed_slots = _allowed_slots(candidate_map.get(intent_id, {})) if intent_id else set()
         filtered = _filtered_slots(slots, allowed_slots)
-        _logger.info("[LLM-SLOT] allowed_slots=%s, raw_slots=%s, filtered_slots=%s",
-                     allowed_slots, slots, filtered)
+        # _logger.info("[LLM-SLOT] allowed_slots=%s, raw_slots=%s, filtered_slots=%s", allowed_slots, slots, filtered)
         print(f"[LLM-SLOT] allowed_slots={allowed_slots}", flush=True)
         print(f"[LLM-SLOT] raw_slots   ={slots}", flush=True)
         print(f"[LLM-SLOT] filtered    ={filtered}", flush=True)

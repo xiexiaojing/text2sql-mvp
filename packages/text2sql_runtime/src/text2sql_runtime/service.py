@@ -404,31 +404,7 @@ class Text2SqlService:
                     execution.rows,
                     semantic_plan.slots.get("current_user_id"),
                 )
-            elif semantic_plan.intent == "grid_building_list" and execution.rows:
-                answer = _answer_grid_building_list(execution.rows)
-            elif semantic_plan.intent == "grid_building_list" and not execution.rows:
-                grid_label = str(semantic_plan.slots.get("grid_name") or "该网格")
-                if execution.mode == "dry_run":
-                    answer = f"未找到「{grid_label}」下的楼栋列表。"
-                else:
-                    matched = self._lookup_grid_names(
-                        query_input.domain_id,
-                        str(semantic_plan.slots.get("grid_name") or ""),
-                        str(semantic_plan.slots.get("grid_name_like") or f"%{grid_label}%"),
-                    )
-                    if matched:
-                        answer = (
-                            f"已找到网格「{'、'.join(matched)}」，但该网格暂未关联网格内楼栋，"
-                            "请在网格管理中维护房屋范围后再查询。"
-                        )
-                    else:
-                        answer = f"未找到名为「{grid_label}」的网格，请确认网格名称是否正确。"
-            elif semantic_plan.intent == "grid_party_member_distribution" and not execution.rows:
-                grid_label = str(semantic_plan.slots.get("grid_name") or "该网格")
-                answer = (
-                    f"「{grid_label}」下尚未关联房屋节点，或该网格暂无登记党员，"
-                    "无法生成楼栋分布热力图。"
-                )
+                
             echarts_option = None
             chart_answer, chart_option = maybe_build_chart(
                 semantic_plan.intent,
