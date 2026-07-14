@@ -546,6 +546,8 @@ class OpenAICompatibleSqlGenerator:
 
 def _parse_llm_content(content: str) -> dict[str, Any]:
     stripped = content.strip()
+    # Strip <think>...</think> tags used by reasoning models (e.g. Qwen, DeepSeek)
+    stripped = re.sub(r"<think>.*?</think>", "", stripped, flags=re.DOTALL).strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json|sql)?", "", stripped).strip()
         stripped = re.sub(r"```$", "", stripped).strip()

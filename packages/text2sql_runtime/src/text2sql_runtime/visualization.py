@@ -88,7 +88,7 @@ _PIE_SPECS = (
     {"label_key": "status_value", "value_key": "total", "title": "支付订单状态分布"},
 )
 
-
+# 返回最长的匹配图表
 def detect_requested_chart_type(question: str | None) -> ChartType | None:
     text = str(question or "").strip()
     if not text:

@@ -316,6 +316,12 @@ class Text2SqlService:
                 display_name=semantic_plan.display_name,
                 output_type=semantic_plan.output_type,
             )
+            if semantic_plan.intent == "visiting_self_rank":
+                answer = _answer_visiting_self_rank(
+                    execution.rows,
+                    semantic_plan.slots.get("current_user_id"),
+                )
+                
             echarts_option = None
             chart_answer, chart_option = maybe_build_chart(
                 semantic_plan.intent,

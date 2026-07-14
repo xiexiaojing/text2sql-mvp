@@ -1,28 +1,23 @@
-version: 1
-concepts:
-  payment_channel:
-    display_name: Payment channel
-    keywords: ["支付渠道", "渠道", "微信", "支付宝", "银联", "channel"]
-    object: PaymentOrder
-    rule:
-      type: table_count
-      table: payment_order
-  refund:
-    display_name: Refund
-    keywords: ["退款", "refund"]
-    object: RefundOrder
-    rule:
-      type: table_count
-      table: refund_order
-  merchant:
-    display_name: Merchant
-    keywords: ["商户", "商家", "merchant"]
-    object: Merchant
-    rule:
-      type: table_count
-      table: merchant
-sensitive_search_keywords:
-  - 手机号
-  - 电话
-  - mobile
-  - payer_mobile
+version: 1                            # 配置文件版本号
+concepts:            # 关联的物理表名
+  user:                               # 用户概念
+    display_name: 用户                # 概念显示名称
+    keywords: ["用户", "员工", "user", "人员", "账号"]  # 触发关键词列表
+    object: User                      # 关联的实体对象名
+    rule:                             # 概念匹配规则
+      type: table_count               # 规则类型
+      table: sys_user                 # 关联的物理表名
+  dept:                               # 部门概念
+    display_name: 部门                # 概念显示名称
+    keywords: ["部门", "dept", "组织"]  # 触发关键词列表
+    object: Dept                      # 关联的实体对象名
+    rule:                             # 概念匹配规则
+      type: table_count               # 规则类型
+      table: sys_dept                 # 关联的物理表名
+sensitive_search_keywords:            # 敏感字段检索关键词（命中时需走敏感字段审批路径）
+  - 手机号                            # 中文敏感关键词
+  - 电话                              # 中文敏感关键词
+  - mobile                            # 英文敏感关键词
+  - phonenumber                       # 用户手机号字段名
+  - 邮箱                              # 邮箱也视为敏感信息
+  - email                             # 邮箱字段名

@@ -75,6 +75,7 @@ def contextualize_question(question: str, history: list[dict[str, Any]] | None) 
     if not normalized_history:
         return current, None
 
+    # 是否追问，如果是则返回追问
     chart_rewritten = _rewrite_chart_type_follow_up(current, normalized_history)
     if chart_rewritten and chart_rewritten != current:
         return chart_rewritten, {
@@ -289,11 +290,13 @@ _TOPIC_PATTERN = re.compile(
     r"([\u4e00-\u9fff\dA-Za-z]+(?:渠道|状态|金额|退款|商户)?(?:分布|统计|排名|占比|结构|构成|情况|趋势))"
 )
 
-
+# 返回去掉图表类型后的问答关键词
 def _extract_chart_topic(text: str) -> str | None:
     normalized = _normalize_question(text)
     if not normalized:
         return None
+    
+    # 将所有图表关键词都用正则匹配，并排序，使长的关键词排在前面，并用|分割
     chart_pattern = "|".join(
         re.escape(keyword)
         for keyword in sorted(_all_chart_keywords(), key=len, reverse=True)
@@ -362,11 +365,11 @@ def _extract_chart_topic_from_assistant(content: str) -> str | None:
         return inline_topic.group(1).strip()
     return None
 
-
+# 是否有匹配的图表，是否没有有关键词，是否去掉前两个后长度小于4
 def _is_bare_chart_type_follow_up(question: str) -> bool:
-    if detect_requested_chart_type(question) is None:
+    if detect_requested_chart_type(question) is None: # 没有匹配的图表
         return False
-    if _extract_chart_topic(question):
+    if _extract_chart_topic(question): # 返回去掉图表类型后的问答关键词，如果有则false？
         return False
     remainder = re.sub(r"[也再一下生成展示用按的换成改为了来]", "", _strip_chart_keywords(question))
     return len(remainder) <= 4
@@ -426,9 +429,10 @@ def _infer_chart_question_from_assistant(content: str) -> str | None:
 
 
 def _rewrite_chart_type_follow_up(question: str, history: list[dict[str, str]]) -> str | None:
-    requested = detect_requested_chart_type(question)
+    requested = detect_requested_chart_type(question) # 返回用什么图表
     if requested is None:
         return None
+    # 如果当前问题既不像追问（follow-up），也不是纯粹的图表类型切换请求，则直接返回 None
     if not _looks_like_follow_up(question) and not _is_bare_chart_type_follow_up(question):
         return None
 
@@ -436,6 +440,7 @@ def _rewrite_chart_type_follow_up(question: str, history: list[dict[str, str]]) 
     if not new_label:
         return None
 
+    # 获取历史记录里最早的提供关键词，用于拼接追问
     topic = _find_prior_chart_topic(history, exclude=question)
     if topic:
         return f"生成一份{topic}{new_label}"

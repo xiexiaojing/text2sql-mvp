@@ -92,6 +92,9 @@ if [ ! -x "$UVICORN" ]; then
     "$VENV_DIR/$VENV_BIN/python" -m pip install -q -e "$ROOT"
 fi
 
+# 强制 Python stdout/stderr 使用 UTF-8 编码，避免 Windows 下日志中文乱码
+export PYTHONIOENCODING=utf-8
+
 # 设置 Python 模块搜索路径，包含 API 应用和运行时包
 export PYTHONPATH="apps/api/src${PATH_SEP}packages/text2sql_runtime/src"
 

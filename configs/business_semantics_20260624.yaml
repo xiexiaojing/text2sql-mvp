@@ -1,213 +1,240 @@
 version: 1
 notes:
-  - Generic payment-domain demo semantics for text2sql-mvp.
-  - Replace entities, intents, and sql_templates with your own business mappings.
-  - Only intents with status=executable and a sql_templates entry will generate SQL.
+  - 基于真实业务（docs/wiki）配置的意图与 SQL 模板，覆盖用户/部门等核心域。
+  - 这些表无 tenant_id，SQL 模板中通过 WHERE del_flag = 0 过滤逻辑删除数据。
+  - 使用 [[slot:body]] 可选块语法，同一意图可同时覆盖"全局统计"和"按部门过滤"两种问法。
+  - 当问句中包含具体部门名时，LLM/启发式提取 dept_name 槽位并自动附加 JOIN + WHERE 过滤；否则统计全量。
+  - 意图设计原则：同类问题合并为一个 intent，通过可选槽位 + 可选 SQL 块区分范围（全局/部门/中心/层级）。
 
 entities:
-  PaymentOrder:
-    tables: [payment_order]
-  RefundOrder:
-    tables: [refund_order]
-  Merchant:
-    tables: [merchant]
+  User:
+    tables: [sys_user]
+  Dept:
+    tables: [sys_dept]
 
 intents:
-  - id: payment_order_count
-    display_name: Payment order count
+
+  # ==================== 用户人数统计（全局 / 指定部门） ====================
+  # 合并原 user_count + user_count_by_dept，通过可选 dept_name 槽位区分：
+  #   "用户人数" / "用户总数" / "多少人"        → 无 dept_name → 统计全部用户
+  #   "集团人数" / "人力资源中心人数" / "销售部有多少人" → 有 dept_name → 按部门过滤
+  - id: user_count
+    display_name: 用户人数
     status: executable
-    priority: 95
-    match: {all: ["订单"], any: ["总数", "有多少", "数量", "多少", "几笔", "笔数"]}
-    examples: ["支付订单总数是多少", "有多少笔支付订单"]
+    priority: 88
+    match:
+      any:
+        - "用户数"
+        - "人数"
+        - "有多少人"
+        - "多少人"
+        - "用户总数"
+        - "员工数"
+        - "员工人数"
+        - "人员数"
+        - "人员总数"
+        - "统计人数"
+        - "有几个"
+        - "有几"
+        - "多少用户"
+        - "多少员工"
+        - "多少人员"
+        - "总人数"
+      none:
+        - "各部门"
+        - "下级部门"
+        - "下属"
+        - "下级"
+        - "子部门"
+        - "各中心"
+    examples:
+      - "用户人数"
+      - "用户总数"
+      - "集团人数"
+      - "集团有多少人"
+      - "人力资源中心人数"
+      - "销售部有多少人"
+      - "有多少用户"
+      - "有多少员工"
     semantic:
-      queries: ["支付订单数量", "统计支付订单总数", "订单笔数"]
-    ontology_refs: [PaymentOrder]
-    physical_tables: [payment_order]
+      queries:
+        - "统计用户总数"
+        - "用户一共有多少"
+        - "集团人员数"
+        - "某部门人数"
+        - "查询用户人数"
+    ontology_refs: [User]
+    physical_tables: [sys_user]
+    optional_slots: [dept_name]
+    slot_defaults: {}
     output_type: scalar_count
-    template: payment_order_count
+    template: user_count
 
-  - id: payment_channel_stat
-    display_name: Payment channel distribution
+  # ==================== 用户男女比例（全局 / 指定部门） ====================
+  # 同样使用可选 dept_name 槽位：
+  #   "男女比例" / "性别分布"              → 全局
+  #   "集团男女比例" / "销售部性别分布"    → 按部门过滤
+  - id: user_sex_ratio
+    display_name: 用户男女比例（支持按部门过滤）
     status: executable
-    priority: 96
-    match: {all: ["订单"], any: ["按渠道", "渠道统计", "渠道分布", "渠道"]}
-    examples: ["支付订单按渠道统计", "各支付渠道订单数量"]
+    priority: 87
+    match:
+      any:
+        - "男女比例"
+        - "性别比例"
+        - "男女分布"
+        - "性别分布"
+        - "男女"
+        - "性别"
+        - "男女人数"
+        - "性别构成"
+        - "男女各有多少"
+        - "性别统计"
+    examples:
+      - "男女比例"
+      - "性别比例"
+      - "用户男女比例"
+      - "集团男女比例"
+      - "人力资源中心男女比例"
+      - "销售部性别分布"
+      - "男女各有多少"
     semantic:
-      queries: ["支付渠道分布", "按渠道统计订单", "各渠道订单数"]
-    ontology_refs: [PaymentOrder]
-    physical_tables: [payment_order]
+      queries:
+        - "按性别统计用户"
+        - "用户性别构成"
+        - "男女员工比例"
+        - "某部门性别分布"
+    ontology_refs: [User]
+    physical_tables: [sys_user]
+    optional_slots: [dept_name]
+    slot_defaults: {}
     output_type: grouped_count
-    template: payment_channel_stat
+    template: user_sex_ratio
 
-  - id: payment_status_stat
-    display_name: Payment status distribution
+  # ==================== 部门总数 ====================
+  # 高优先级 + match_none 排除用户相关词，确保 "各部门有多少用户" 不会被本意图抢走
+  - id: dept_count
+    display_name: 部门总数
     status: executable
     priority: 92
-    match: {all: ["订单"], any: ["按状态", "状态统计", "状态分布"]}
-    examples: ["支付订单按状态统计"]
+    match:
+      all: ["部门"]
+      any: ["总数", "有多少", "数量", "多少", "几个"]
+      none: ["用户", "员工", "人员", "男女", "性别"]
+    examples:
+      - "部门总数是多少"
+      - "有多少个部门"
+      - "部门数量"
     semantic:
-      queries: ["订单状态分布", "按状态统计支付订单"]
-    ontology_refs: [PaymentOrder]
-    physical_tables: [payment_order]
-    output_type: grouped_count
-    template: payment_status_stat
-
-  - id: payment_channel_amount_distribution
-    display_name: Payment channel amount distribution
-    status: executable
-    priority: 94
-    match: {any: ["支付渠道", "渠道金额", "交易金额分布", "渠道交易金额"]}
-    examples: ["各支付渠道交易金额分布", "生成一份支付渠道金额分布饼图"]
-    semantic:
-      queries: ["支付渠道金额占比", "各渠道交易金额分布图", "渠道金额饼图"]
-    ontology_refs: [PaymentOrder]
-    physical_tables: [payment_order]
-    output_type: grouped_metric
-    template: payment_channel_amount_distribution
-
-  - id: refund_daily_trend
-    display_name: Refund daily trend
-    status: executable
-    priority: 93
-    match: {all: ["退款"], any: ["趋势", "走势", "折线图", "每日", "近7天", "近七天"]}
-    examples: ["近7天每日退款笔数趋势", "退款笔数折线图"]
-    semantic:
-      queries: ["退款每日趋势", "近一周退款走势", "退款笔数时序图"]
-    ontology_refs: [RefundOrder]
-    physical_tables: [refund_order]
-    output_type: grouped_count
-    template: refund_daily_trend
-
-  - id: merchant_count
-    display_name: Merchant count
-    status: executable
-    priority: 90
-    match: {any: ["商户总数", "商户有多少", "商家数量", "有多少商户"]}
-    examples: ["商户总数是多少"]
-    semantic:
-      queries: ["商户数量", "统计商户总数"]
-    ontology_refs: [Merchant]
-    physical_tables: [merchant]
+      queries:
+        - "统计部门总数"
+        - "部门一共有多少"
+    ontology_refs: [Dept]
+    physical_tables: [sys_dept]
     output_type: scalar_count
-    template: merchant_count
+    template: dept_count
 
-  - id: merchant_payment_rank
-    display_name: Merchant payment rank
+
+
+  # ==================== 指定部门下级各部门人数 ====================
+  # 区别于 user_by_dept（全量分组）：本意图需要提取 parent_dept_name，只查该部门的下级
+  - id: user_by_parent_dept
+    display_name: 指定部门下级所有部门人数
     status: executable
-    priority: 91
-    match: {all: ["商户"], any: ["排名", "排行", "TOP", "top"]}
-    examples: ["商户交易金额排名", "商户交易金额TOP10"]
+    priority: 88
+    match:
+      any:
+        - "下级"
+        - "下属"
+        - "子部门"
+        - "下属部门"
+        - "下级部门"
+        - "各部门人数"
+        - "各中心人数"
+    examples:
+      - "某部门下级各部门人数"
+      - "技术中心下属部门人数"
+      - "财务部下级部门人数"
+      - "人力资源中心子部门人数"
     semantic:
-      queries: ["商户交易额排名", "按交易金额排序商户"]
-    ontology_refs: [Merchant, PaymentOrder]
-    optional_slots: [result_limit]
-    physical_tables: [merchant, payment_order]
-    output_type: grouped_metric
-    template: merchant_payment_rank
-    slot_defaults: {result_limit: 10}
+      queries:
+        - "某部门下级人数分布"
+        - "指定部门子部门人员统计"
+    ontology_refs: [User, Dept]
+    physical_tables: [sys_user, sys_dept]
+    required_slots: [parent_dept_name]
+    slot_defaults:
+      parent_dept_name: 易鑫集团
+    output_type: grouped_count
+    template: user_by_parent_dept
 
-  - id: payment_phone_lookup
-    display_name: Payment phone lookup
-    status: executable
-    priority: 97
-    match: {all: ["手机"], any: ["订单", "支付"]}
-    examples: ["按手机号查询支付订单", "有手机号13800138000的订单吗"]
-    semantic:
-      queries: ["手机号查订单", "按付款手机号查询"]
-    ontology_refs: [PaymentOrder]
-    required_slots: [phone]
-    physical_tables: [payment_order]
-    output_type: scalar_count
-    template: payment_phone_lookup
 
-  - id: payment_sensitive_fields
-    display_name: Payment sensitive fields
-    status: executable
-    priority: 98
-    match: {any: ["付款手机号", "payer_mobile", "查询付款手机"]}
-    examples: ["查询支付订单付款手机号"]
-    semantic:
-      queries: ["返回订单付款手机号字段", "查看 payer mobile"]
-    ontology_refs: [PaymentOrder]
-    physical_tables: [payment_order]
-    output_type: list
-    template: payment_sensitive_fields
 
-  - id: unconfigured_demo
-    display_name: Unconfigured metric (demo)
-    status: needs_mapping
-    priority: 10
-    match: {any: ["火星基地", "飞船泊位"]}
-    examples: ["请统计火星基地飞船泊位能耗"]
-    semantic:
-      queries: ["火星基地能耗统计"]
-    reason: Demo intent kept to show rejection when semantics are not mapped.
-    needs: [physical_table, sql_template]
 
 sql_templates:
-  payment_order_count:
-    plan: Count payment orders for the current tenant.
-    sql: >
-      SELECT COUNT(*) AS total FROM payment_order po
+  # ==================== 用户/部门域 ====================
 
-  payment_channel_stat:
-    plan: Group payment orders by channel.
-    sql: >
-      SELECT po.channel AS channel_value, COUNT(*) AS total
-      FROM payment_order po
-      GROUP BY po.channel
-      ORDER BY total DESC
-
-  payment_status_stat:
-    plan: Group payment orders by status.
-    sql: >
-      SELECT po.status AS status_value, COUNT(*) AS total
-      FROM payment_order po
-      GROUP BY po.status
-      ORDER BY total DESC
-
-  payment_channel_amount_distribution:
-    plan: Sum payment amount by channel for chart visualization.
-    sql: >
-      SELECT po.channel AS channel_value, SUM(po.amount) AS total
-      FROM payment_order po
-      GROUP BY po.channel
-      ORDER BY total DESC
-
-  refund_daily_trend:
-    plan: Daily refund count for the last 7 days.
-    sql: >
-      SELECT DATE(ro.refund_time) AS refund_date, COUNT(*) AS total
-      FROM refund_order ro
-      WHERE ro.refund_time >= DATE_SUB(CURRENT_DATE, INTERVAL 7 DAY)
-      GROUP BY refund_date
-      ORDER BY refund_date
-
-  merchant_count:
-    plan: Count merchants for the current tenant.
-    sql: >
-      SELECT COUNT(*) AS total FROM merchant m
-
-  merchant_payment_rank:
-    plan: Rank merchants by total payment amount.
-    params: {result_limit: result_limit}
-    sql: >
-      SELECT m.name AS merchant_name, SUM(po.amount) AS total
-      FROM merchant m
-      JOIN payment_order po ON po.merchant_id = m.id
-      GROUP BY m.id, m.name
-      ORDER BY total DESC
-      LIMIT %(result_limit)s
-
-  payment_phone_lookup:
-    plan: Match payer mobile on payment orders without embedding the phone in SQL text.
-    params: {phone: phone}
+  # --- 合并 user_count + user_count_by_dept ---
+  # 通过 [[dept_name:...]] 可选块：当 LLM/启发式提取到 dept_name 时附加 JOIN + WHERE 过滤；
+  # 当 dept_name 为空（如问 "用户人数"）时，整段被移除，等价于统计全量用户。
+  user_count:
+    plan: 统计未删除的用户总数，可选按部门全称模糊过滤。
+    params:
+      dept_name: dept_name
     sql: >
       SELECT COUNT(*) AS total
-      FROM payment_order po
-      WHERE po.payer_mobile = %(phone)s
+      FROM sys_user u
+      [[dept_name:JOIN sys_dept d ON u.dept_id = d.dept_id]]
+      WHERE u.status = 0
+      [[dept_name:AND d.del_flag = 0 AND d.dept_long_name like concat('%', %(dept_name)s, '%')]]
 
-  payment_sensitive_fields:
-    plan: Return payer mobile column (requires allow_sensitive_fields at runtime).
+
+  # --- 部门总数 ---
+  dept_count:
+    plan: 统计部门总数。
     sql: >
-      SELECT po.id, po.payer_mobile FROM payment_order po
+      SELECT COUNT(*) AS total
+      FROM sys_dept d
+      WHERE d.del_flag = 0
+
+  # --- 用户男女比例（全局 / 按部门过滤） ---
+  user_sex_ratio:
+    plan: "按性别分组统计用户数量（sex: 0男 1女 2未知），可选按部门全称模糊过滤。"
+    params:
+      dept_name: dept_name
+    sql: >
+      SELECT
+        CASE u.sex
+          WHEN 0 THEN '男'
+          WHEN 1 THEN '女'
+          ELSE '未知'
+        END AS sex_name,
+        COUNT(*) AS total
+      FROM sys_user u
+      [[dept_name:JOIN sys_dept d ON u.dept_id = d.dept_id]]
+      WHERE u.status = 0
+      [[dept_name:AND d.del_flag = 0 AND d.dept_long_name like concat('%', %(dept_name)s, '%')]]
+      GROUP BY u.sex
+      ORDER BY total DESC
+
+
+  # --- 指定部门所有下级各部门人数 ---
+  user_by_parent_dept:
+    plan: "查询指定部门所有下级各部门人数，通过 sys_dept 自关联 d.parent_id = parent.dept_id 解析父子关系。"
+    params:
+      parent_dept_name: parent_dept_name
+    sql: >
+      SELECT t.dept_name, COUNT(u.user_id) AS total
+      FROM sys_dept t
+      LEFT JOIN sys_dept u_dept ON (t.dept_id = u_dept.dept_id OR FIND_IN_SET(t.dept_id, u_dept.ancestors))
+      LEFT JOIN sys_user u ON u_dept.dept_id = u.dept_id
+      WHERE t.parent_id = (
+        select dept_id 
+        from sys_dept
+        where dept_long_name like concat('%', %(parent_dept_name)s, '%')
+        and status = 0
+        order by dept_lvl 
+        limit 1
+      )
+      GROUP BY t.dept_name;
+

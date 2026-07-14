@@ -1,0 +1,232 @@
+version: 1                            # 配置文件版本号
+notes:                                # 配置说明备注列表
+  - 真实业务 schema（基于 docs/wiki 表说明生成），覆盖项目/采购/供应商/询价/用户/部门/会议/知讯等核心域。  # 真实业务白名单
+  - 这些表无 tenant_id 租户隔离列，采用 del_flag 逻辑删除；domain_column 留空，SqlPolicy 不注入租户过滤。  # 无租户隔离说明
+  - 仅对列出的表/列/JOIN 允许 SELECT；新增表请参考 docs/wiki 同名 md 文件补充。  # 扩展指引
+tables:                               # 白名单表列表（SqlGuard、SqlPolicy、SchemaContextBuilder、Router 均依赖此配置）
+  - name: project                     # 物理表名：项目管理
+    object: Project                   # 实体对象名
+    display_name: 项目                # 表显示名称
+    row_count_estimate: 5000          # 预估行数（用于 EXPLAIN 成本评估）
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: name, display_name: 项目名称}                          # 项目名称
+      - {name: project_code, display_name: 项目编号}                  # 项目编号（唯一，被采购单/询价/采购物品关联）
+      - {name: end_date, display_name: 建议采购结束时间}              # 建议采购结束时间
+      - {name: budget, display_name: 最终预算}                        # 最终预算
+      - {name: user_id, display_name: 创建人工号}                     # 创建人工号
+      - {name: create_by, display_name: 创建者}                       # 创建者
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: update_by, display_name: 更新者}                       # 更新者
+      - {name: update_time, display_name: 更新时间}                   # 更新时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes:                          # 表索引列表
+      - {name: PROJECT_CODE_UNIQUE, columns: [project_code]}          # 项目编号唯一索引
+      - {name: C_DELETE_FLAG, columns: [del_flag]}                    # 删除标识普通索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: purchase_order, on: project.project_code = purchase_order.project_code}       # 项目-采购单
+      - {to_table: inquiry, on: project.project_code = inquiry.project_code}                     # 项目-询价单
+
+  - name: purchase_order              # 物理表名：采购单
+    object: PurchaseOrder             # 实体对象名
+    display_name: 采购单              # 表显示名称
+    row_count_estimate: 20000         # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: project_code, display_name: 项目编号}                  # 项目编号（关联 project）
+      - {name: order_no, display_name: 采购单编号}                    # 采购单编号
+      - {name: reason, display_name: 采购理由}                        # 采购理由
+      - {name: supplier_id, display_name: 供应商ID}                   # 供应商ID（关联 caigou_gongyingshang.id）
+      - {name: create_by, display_name: 创建者}                       # 创建者
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: update_by, display_name: 更新者}                       # 更新者
+      - {name: update_time, display_name: 更新时间}                   # 更新时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes:                          # 表索引列表
+      - {name: C_DELETE_FLAG, columns: [del_flag]}                    # 删除标识普通索引
+      - {name: PROJECT_CODE, columns: [project_code]}                 # 项目编号普通索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: caigou_gongyingshang, on: purchase_order.supplier_id = caigou_gongyingshang.id}  # 采购单-供应商
+      - {to_table: project, on: purchase_order.project_code = project.project_code}                  # 采购单-项目
+
+  - name: purchase_item               # 物理表名：采购物品
+    object: PurchaseItem              # 实体对象名
+    display_name: 采购物品            # 表显示名称
+    row_count_estimate: 80000         # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: project_code, display_name: 项目编码}                  # 项目编码（关联 project）
+      - {name: name, display_name: 物品名称}                          # 物品名称
+      - {name: purchase_type, display_name: 采购类目}                 # 采购类目
+      - {name: purchase_number, display_name: 数量}                   # 数量
+      - {name: params, display_name: 参数}                            # 参数
+      - {name: contract_type, display_name: 合同类型}                 # 合同类型
+      - {name: budget, display_name: 预估单价}                        # 预估单价
+      - {name: address, display_name: 交货地址}                       # 交货地址
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes: []                       # 无业务索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: project, on: purchase_item.project_code = project.project_code}  # 采购物品-项目
+
+  - name: caigou_gongyingshang        # 物理表名：采购供应商列表
+    object: Supplier                  # 实体对象名
+    display_name: 供应商              # 表显示名称
+    row_count_estimate: 3000          # 预估行数
+    columns:                          # 允许访问的列列表（仅列常用字段，完整字段见 docs/wiki/caigou_gongyingshang.md）
+      - {name: id, display_name: 主键ID}                              # 主键（被采购单/询价供应商的 supplier_id 关联）
+      - {name: gys_zhuti_name, display_name: 供应商主体名称}           # 供应商主体名称（唯一）
+      - {name: gys_xinyongma, display_name: 统一社会信用码}            # 统一社会信用码（唯一）
+      - {name: gys_name, display_name: 供应商渠道名称}                 # 供应商渠道名称
+      - {name: dengji, display_name: 供应商等级}                       # 供应商等级（默认3）
+      - {name: status, display_name: 状态}                            # 状态：1无效/2待填写/3已提交/4注册中/5修改审批中/6等级变更中/7有效
+      - {name: caigou_type, display_name: 采购方式}                    # 采购方式：1自采 2集采
+      - {name: gys_source, display_name: 渠道来源}                     # 渠道来源：1公司内部 2外部自荐
+      - {name: gys_hangye, display_name: 所属行业}                     # 所属行业
+      - {name: gys_zhuce_riqi, display_name: 注册日期}                 # 注册日期
+      - {name: gys_zhuceziben, display_name: 注册资本}                 # 注册资本(万)
+      - {name: gys_shijiaoziben, display_name: 实缴资本}               # 实缴资本(万)
+      - {name: create_uid, display_name: 创建者工号}                   # 创建者工号
+      - {name: create_time, display_name: 创建时间}                    # 创建时间
+      - {name: update_time, display_name: 更新时间}                    # 更新时间
+      - {name: del_flag, display_name: 删除标识}                       # 删除标识：0-未删除 1-已删除
+    indexes: []                       # 无业务索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: purchase_order, on: caigou_gongyingshang.id = purchase_order.supplier_id}        # 供应商-采购单
+      - {to_table: inquiry_supplier, on: caigou_gongyingshang.id = inquiry_supplier.supplier_id}     # 供应商-询价供应商
+
+  - name: inquiry                     # 物理表名：询价单管理
+    object: Inquiry                   # 实体对象名
+    display_name: 询价单              # 表显示名称
+    row_count_estimate: 15000         # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: inquiry_code, display_name: 询价单号}                  # 询价单号（唯一，被 inquiry_supplier 关联）
+      - {name: project_code, display_name: 项目编号}                  # 项目编号（关联 project）
+      - {name: title, display_name: 询价标题}                         # 询价标题
+      - {name: start_date, display_name: 开始时间}                    # 开始时间
+      - {name: end_date, display_name: 结束时间}                      # 结束时间
+      - {name: inquiry_type, display_name: 询价类型}                  # 询价类型
+      - {name: status, display_name: 状态}                            # 状态：1草稿/2未开始/3报价进行中/4已结束/5已终止
+      - {name: user_id, display_name: 创建人工号}                     # 创建人工号
+      - {name: create_by, display_name: 创建者}                       # 创建者
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: update_time, display_name: 更新时间}                   # 更新时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes:                          # 表索引列表
+      - {name: inquiry_CODE_UNIQUE, columns: [inquiry_code]}          # 询价单号唯一索引
+      - {name: PROJECT_CODE, columns: [project_code]}                 # 项目编号普通索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: inquiry_supplier, on: inquiry.inquiry_code = inquiry_supplier.inquiry_code}      # 询价单-询价供应商
+      - {to_table: project, on: inquiry.project_code = project.project_code}                        # 询价单-项目
+
+  - name: inquiry_supplier            # 物理表名：供应商参与的询价单
+    object: InquirySupplier           # 实体对象名
+    display_name: 询价供应商          # 表显示名称
+    row_count_estimate: 40000         # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: supplier_id, display_name: 供应商ID}                   # 供应商ID（关联 caigou_gongyingshang.id）
+      - {name: supplier_name, display_name: 供应商名称}               # 供应商名称
+      - {name: inquiry_code, display_name: 询价单号}                  # 询价单号（关联 inquiry.inquiry_code）
+      - {name: project_code, display_name: 项目编号}                  # 项目编号（关联 project）
+      - {name: end_date, display_name: 结束时间}                      # 结束时间
+      - {name: status, display_name: 状态}                            # 状态：1待填写或草稿/2已结束或已终止/3已提交
+      - {name: send_status, display_name: 发送状态}                   # 发送状态
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除（已撤销）
+    indexes: []                       # 无业务索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: caigou_gongyingshang, on: inquiry_supplier.supplier_id = caigou_gongyingshang.id}  # 询价供应商-供应商
+      - {to_table: inquiry, on: inquiry_supplier.inquiry_code = inquiry.inquiry_code}                  # 询价供应商-询价单
+      - {to_table: project, on: inquiry_supplier.project_code = project.project_code}                  # 询价供应商-项目
+
+  - name: sys_user                    # 物理表名：用户信息表
+    object: User                      # 实体对象名
+    display_name: 用户                # 表显示名称
+    row_count_estimate: 5000          # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: user_id, display_name: 用户ID}                         # 用户ID（工号，唯一）
+      - {name: suser_id, display_name: 直接上级}                      # 直接上级 user_id（自关联）
+      - {name: dept_id, display_name: 部门ID}                         # 部门ID（关联 sys_dept.dept_id）
+      - {name: user_name, display_name: 用户账号}                     # 用户账号（域账号，唯一）
+      - {name: nick_name, display_name: 用户姓名}                     # 用户姓名
+      - {name: email, display_name: 用户邮箱}                         # 用户邮箱
+      - {name: phonenumber, display_name: 手机号码, sensitive: true, searchable: false}  # 手机号码（敏感字段，需脱敏，不可搜索）
+      - {name: work_city, display_name: 工作地点}                     # 工作地点
+      - {name: sex, display_name: 用户性别}                           # 用户性别（0男 1女 2未知）
+      - {name: status, display_name: 帐号状态}                        # 帐号状态（0正常 1停用）
+      - {name: del_flag, display_name: 删除标志}                      # 删除标志（0存在 1删除）
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+    indexes:                          # 表索引列表
+      - {name: sys_user_UN, columns: [user_id]}                       # user_id 唯一索引
+      - {name: sys_user_un_username, columns: [user_name]}            # user_name 唯一索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: sys_dept, on: sys_user.dept_id = sys_dept.dept_id}  # 用户-部门
+
+  - name: sys_dept                    # 物理表名：部门表
+    object: Dept                      # 实体对象名
+    display_name: 部门                # 表显示名称
+    row_count_estimate: 200           # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 自增ID}                              # 自增ID
+      - {name: dept_id, display_name: 部门ID}                         # 部门ID（唯一，被 sys_user.dept_id 关联）
+      - {name: parent_id, display_name: 父部门ID}                     # 父部门ID（0表示顶级部门）
+      - {name: ancestors, display_name: 祖级列表}                     # 祖级列表（逗号分隔）
+      - {name: dept_name, display_name: 部门名称}                     # 部门名称
+      - {name: dept_long_name, display_name: 部门全称}                # 部门全称
+      - {name: dept_lvl, display_name: 部门层级}                      # 部门层级
+      - {name: leader, display_name: 部门领导}                        # 部门领导
+      - {name: status, display_name: 部门状态}                        # 部门状态（0正常 1停用）
+      - {name: del_flag, display_name: 删除标志}                      # 删除标志（0存在 1删除）
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+    indexes:                          # 表索引列表
+      - {name: sys_dept_UN, columns: [dept_id]}                       # dept_id 唯一索引
+    joins:                            # 允许的 JOIN 路径
+      - {to_table: sys_user, on: sys_dept.dept_id = sys_user.dept_id}  # 部门-用户
+
+  - name: conference                  # 物理表名：会议表
+    object: Conference                # 实体对象名
+    display_name: 会议                # 表显示名称
+    row_count_estimate: 10000         # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 会议ID}                              # 会议ID（主键）
+      - {name: title, display_name: 会议主题}                         # 会议主题
+      - {name: conference_room_id, display_name: 会议室ID}            # 会议室ID
+      - {name: start_time, display_name: 会议开始时间}                # 会议开始时间
+      - {name: end_time, display_name: 会议结束时间}                  # 会议结束时间
+      - {name: reserve_user_id, display_name: 预订人ID}               # 预订人ID
+      - {name: status, display_name: 会议状态}                        # 会议状态：1正常 2已取消 3结束 4审批中
+      - {name: type, display_name: 会议类型}                          # 会议类型：1普通会议 2周期会议
+      - {name: create_by, display_name: 创建者}                       # 创建者
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes:                          # 表索引列表
+      - {name: IDX_STATUS, columns: [status]}                         # 状态普通索引
+      - {name: IDX_TITLE, columns: [title]}                           # 主题普通索引
+      - {name: INX_USER, columns: [reserve_user_id]}                  # 预订人普通索引
+    joins: []                         # 会议仅做单表统计，不配置跨表 JOIN
+
+  - name: kno_news                    # 物理表名：知迅/通知公告/文档制度表
+    object: News                      # 实体对象名
+    display_name: 知讯                # 表显示名称
+    row_count_estimate: 3000          # 预估行数
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键
+      - {name: name, display_name: 标题}                              # 标题
+      - {name: subdirectory_id, display_name: 子目录ID}               # 子目录ID
+      - {name: type, display_name: 发布类型}                          # 发布类型：1手动发布 2定时发布
+      - {name: status, display_name: 发布状态}                        # 发布状态：1草稿 2待发布 3已发布
+      - {name: news_type, display_name: 知讯类型}                     # 知讯类型
+      - {name: file_number, display_name: 文件编号}                   # 文件编号
+      - {name: version, display_name: 版本}                           # 版本
+      - {name: issue_date, display_name: 签发日期}                    # 签发日期
+      - {name: effective_date, display_name: 生效日期}                # 生效日期
+      - {name: release_time, display_name: 发布时间}                  # 发布时间
+      - {name: user_id, display_name: 用户ID}                         # 用户ID
+      - {name: create_by, display_name: 创建者}                       # 创建者
+      - {name: create_time, display_name: 创建时间}                   # 创建时间
+      - {name: del_flag, display_name: 删除标识}                      # 删除标识：0-未删除 1-已删除
+    indexes:                          # 表索引列表
+      - {name: IDX_SUBDIRECTORY_ID, columns: [subdirectory_id]}       # 子目录ID普通索引
+    joins: []                         # 知讯仅做单表统计，不配置跨表 JOIN
