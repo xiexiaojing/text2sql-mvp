@@ -43,9 +43,24 @@ def test_contextualize_short_follow_up_with_previous_subject():
         [{"role": "user", "content": "支付订单按渠道统计"}],
     )
 
-    assert rewritten == "支付订单 按状态统计"
+    assert rewritten == "支付订单按状态统计"
     assert log is not None
-    assert log["effectiveQuestion"] == rewritten
+    assert log["rewriteReason"] == "dimension_slot_follow_up"
+
+
+def test_contextualize_count_to_list_follow_up_generalized():
+    rewritten, log = contextualize_question(
+        "有哪些",
+        [
+            {"role": "user", "content": "商户有多少"},
+            {"role": "assistant", "content": "商户共 128 家。"},
+            {"role": "user", "content": "有哪些"},
+        ],
+    )
+
+    assert rewritten == "商户有哪些"
+    assert log is not None
+    assert log["rewriteReason"] == "count_to_list_follow_up"
 
 
 def test_query_uses_history_for_follow_up_grouping(service):

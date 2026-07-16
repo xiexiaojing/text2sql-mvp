@@ -6,6 +6,7 @@ from typing import Any
 
 from .column_labels import EntityColumnLabelIndex, resolve_column_display_labels
 from .display_columns import filter_public_table
+from .field_encryption import FieldEncryptionSettings, decrypt_field_value, is_stored_ciphertext
 from .models import ExecutionResult
 from .schema import SchemaCatalog
 
@@ -22,9 +23,11 @@ class ResultFormatter:
         self,
         catalog: SchemaCatalog | None = None,
         entity_labels: EntityColumnLabelIndex | None = None,
+        field_encryption: FieldEncryptionSettings | None = None,
     ) -> None:
         self.catalog = catalog
         self.entity_labels = entity_labels
+        self.field_encryption = field_encryption
 
     def format(
         self,
@@ -62,7 +65,9 @@ class ResultFormatter:
                 {
                     "columns": execution.columns,
                     "column_labels": column_labels,
-                    "rows": [_format_row_display_values(row) for row in execution.rows],
+                    "rows": [
+                        _format_row_display_values(row, self.field_encryption) for row in execution.rows
+                    ],
                     "row_count": len(execution.rows),
                     "mode": execution.mode,
                 }
@@ -132,9 +137,16 @@ def _looks_like_epoch(value: Any) -> bool:
     return 1_000_000_000 <= abs_number < 10_000_000_000
 
 
-def _format_row_display_values(row: dict[str, Any]) -> dict[str, Any]:
+def _format_row_display_values(
+    row: dict[str, Any],
+    field_encryption: FieldEncryptionSettings | None = None,
+) -> dict[str, Any]:
     formatted = dict(row)
     for key, value in row.items():
+        if field_encryption is not None and field_encryption.active:
+            text = str(value or "")
+            if is_stored_ciphertext(text):
+                formatted[key] = decrypt_field_value(text, field_encryption)
         if _is_timestamp_column(key) and _looks_like_epoch(value):
             formatted[key] = _format_timestamp(value)
     return formatted

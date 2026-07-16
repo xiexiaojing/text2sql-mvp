@@ -55,3 +55,10 @@ def test_fast_path_skips_llm_for_example_matched_payment_question(project_root: 
     assert plan.intent == "payment_order_count"
     assert plan.slot_source == "heuristic_fast_path"
     assert plan.slot_elapsed_ms == 0
+
+
+def test_best_intent_requires_min_lexical_keyword_hits(project_root: Path):
+    semantics = BusinessSemanticIndex.from_config(project_root / "configs" / "business_semantics.yaml")
+
+    matched = semantics._best_intent("渠道")
+    assert matched is None
