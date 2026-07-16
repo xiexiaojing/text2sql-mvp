@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from text2sql_runtime.audit import SQLiteAuditStore
-from text2sql_runtime.business_semantics import BusinessSemanticIndex
+from text2sql_runtime.business_semantics import BusinessSemanticIndex, resolve_business_semantics_path
 from text2sql_runtime.config import load_settings
 from text2sql_runtime.executor import DryRunExecutor
 from text2sql_runtime.field_encryption import FieldEncryptionSettings
@@ -69,7 +69,7 @@ def service_with_field_encryption(project_root: Path, tmp_path: Path) -> Text2Sq
         field_encryption=FieldEncryptionSettings(enabled=True, encryption_type="sm4"),
     )
     business_semantics = BusinessSemanticIndex.from_config(
-        project_root / "configs" / "business_semantics.yaml",
+        resolve_business_semantics_path(project_root),
         vector_settings=settings.intent_vector,
         llm_settings=settings.llm,
         field_encryption=settings.field_encryption,

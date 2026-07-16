@@ -1,0 +1,16 @@
+version: 1
+notes:
+  - Unconfigured / demo intents for text2sql-mvp.
+  - Kept to show rejection behavior when semantics are not mapped.
+
+intents:
+  - id: unconfigured_demo
+    display_name: Unconfigured metric (demo)
+    status: needs_mapping
+    priority: 10
+    match: {any: ["火星基地", "飞船泊位"]}
+    examples: ["请统计火星基地飞船泊位能耗"]
+    semantic:
+      queries: ["火星基地能耗统计"]
+    reason: Demo intent kept to show rejection when semantics are not mapped.
+    needs: [physical_table, sql_template]

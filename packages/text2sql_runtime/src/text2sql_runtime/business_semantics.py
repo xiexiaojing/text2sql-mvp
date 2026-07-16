@@ -96,6 +96,54 @@ class SemanticPlan:
         }
 
 
+def _load_business_semantics_config(path: Path) -> dict[str, Any]:
+    """Load business semantics from a single YAML file or a directory of YAML files.
+
+    When ``path`` is a directory, all ``*.yaml`` files within are loaded and merged:
+    - ``entities``: shallow merge (later files override duplicate keys)
+    - ``intents``: concatenation of all lists
+    - ``sql_templates``: shallow merge (later files override duplicate keys)
+    - ``entity_query_schemas``: shallow merge (later files override duplicate keys)
+    """
+    if path.is_file():
+        return load_yaml(path)
+
+    if not path.is_dir():
+        return {}
+
+    merged: dict[str, Any] = {
+        "entities": {},
+        "intents": [],
+        "sql_templates": {},
+        "entity_query_schemas": {},
+    }
+
+    for yaml_file in sorted(path.glob("*.yaml")):
+        raw = load_yaml(yaml_file)
+        if "entities" in raw:
+            merged["entities"].update(raw["entities"])
+        if "intents" in raw:
+            merged["intents"].extend(raw["intents"])
+        if "sql_templates" in raw:
+            merged["sql_templates"].update(raw["sql_templates"])
+        if "entity_query_schemas" in raw:
+            merged["entity_query_schemas"].update(raw["entity_query_schemas"])
+
+    return merged
+
+
+def resolve_business_semantics_path(project_root: Path) -> Path:
+    """Resolve the business semantics config path.
+
+    Prefers ``configs/business_semantics/`` directory over the legacy single
+    ``configs/business_semantics.yaml`` file for backward compatibility.
+    """
+    dir_path = project_root / "configs" / "business_semantics"
+    if dir_path.exists():
+        return dir_path
+    return project_root / "configs" / "business_semantics.yaml"
+
+
 class BusinessSemanticIndex:
     def __init__(
         self,
@@ -153,7 +201,7 @@ class BusinessSemanticIndex:
                 routing_settings=routing_settings,
                 field_encryption=field_encryption,
             )
-        raw = load_yaml(path)
+        raw = _load_business_semantics_config(path)
         performance_path = path.parent / "performance.yaml"
         routing = routing_settings or IntentRoutingSettings.from_performance(
             load_yaml(performance_path) if performance_path.exists() else {}
@@ -219,8 +267,10 @@ class BusinessSemanticIndex:
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
         started = time.monotonic()
         candidates = self._candidate_intents(question)
+
+        # vector / embeddings未启用，则走自定义意图识别逻辑
         if not candidates and not self.vector_index.enabled:
-            matched = self._best_intent(question)
+            matched = self._best_intent(question) # 意图识别结果
             if matched is not None:
                 intent, confidence = matched
                 if not self._passes_lexical_only_gate(question, intent, confidence):
@@ -874,7 +924,7 @@ class BusinessSemanticIndex:
         def optional_block(match: re.Match[str]) -> str:
             slot_name = match.group(1)
             body = match.group(2)
-            return body if not _empty(slots.get(slot_name)) else ""
+            return body if _lenGT1(slots.get(slot_name)) else ""
 
         def replace(match: re.Match[str]) -> str:
             name = match.group(1)
@@ -900,3 +950,10 @@ def _empty(value: Any) -> bool:
         return True
     return False
 
+
+def _lenGT1(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and len(value.strip()) > 1:
+        return True
+    return False

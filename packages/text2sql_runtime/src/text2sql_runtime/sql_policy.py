@@ -7,6 +7,7 @@ from .schema import SchemaCatalog
 from .sql_utils import extract_table_refs, has_where, normalize_sql, split_before_suffix
 
 LIMIT_RE = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
+LIMIT_PARAM_RE = re.compile(r"\blimit\s+%\(\w+\)s\b", re.IGNORECASE)
 AGGREGATE_RE = re.compile(r"\b(count|sum|avg|min|max)\s*\(", re.IGNORECASE)
 GROUP_BY_RE = re.compile(r"\bgroup\s+by\b", re.IGNORECASE)
 
@@ -31,6 +32,12 @@ def ensure_limit(sql: str, default_limit: int, max_limit: int) -> str:
     normalized = normalize_sql(sql)
     if _is_scalar_aggregate(normalized):
         return normalized
+    
+    # Check for parameterized LIMIT (e.g., LIMIT %(result_limit)s)
+    if LIMIT_PARAM_RE.search(normalized):
+        # SQL already has a parameterized LIMIT, don't add another one
+        return normalized
+    
     match = LIMIT_RE.search(normalized)
     if match:
         requested = int(match.group(1))

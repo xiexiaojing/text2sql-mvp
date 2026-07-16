@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import sys
 from functools import lru_cache
 from html import escape
 from pathlib import Path
@@ -10,6 +12,18 @@ from fastapi.responses import HTMLResponse
 from text2sql_runtime.evals import run_eval_cases
 from text2sql_runtime.models import QueryInput
 from text2sql_runtime.service import Text2SqlService
+
+# 确保 Python logging 输出 UTF-8，与 PYTHONIOENCODING=utf-8 配合
+# 将 text2sql 相关包的所有 DEBUG 日志输出到 stdout（最终写入 api.log）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+# 静默 uvicorn 自身的详细日志，避免重复
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 app = FastAPI(title="text2sql-mvp", version="0.1.0")
 
@@ -54,6 +68,7 @@ def chat() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Text2SQL MVP 查询</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
   <style>
     :root {{
       color-scheme: light;
@@ -67,7 +82,8 @@ def chat() -> str:
     header {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 18px; }}
     h1 {{ margin: 0; font-size: 24px; font-weight: 700; }}
     .status {{ color: #5d6678; font-size: 13px; }}
-    .layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr) 430px; gap: 16px; align-items: start; }}
+    .layout {{ display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: stretch; }}
+    .sidebar {{ display: flex; flex-direction: column; gap: 16px; height: calc(100vh - 115px); min-height: 0; }}
     .panel, .chatbox, .logpanel {{ background: #fff; border: 1px solid #dde2ea; border-radius: 8px; }}
     .panel, .logpanel {{ padding: 16px; }}
     label {{ display: block; margin-bottom: 6px; color: #485368; font-size: 13px; font-weight: 600; }}
@@ -94,9 +110,7 @@ def chat() -> str:
     }}
     .primary {{ width: 100%; background: #1f6feb; color: #fff; }}
     .primary:disabled {{ background: #94a3b8; cursor: wait; }}
-    .examples {{ display: grid; gap: 8px; margin-top: 16px; }}
-    .example {{ text-align: left; color: #1f3b63; background: #edf4ff; }}
-    .chatbox {{ min-height: 640px; display: flex; flex-direction: column; overflow: hidden; }}
+    .chatbox {{ height: calc(100vh - 115px); display: flex; flex-direction: column; overflow: hidden; }}
     .messages {{ flex: 1; padding: 18px; overflow: auto; display: grid; align-content: start; gap: 12px; }}
     .msg {{ max-width: 88%; padding: 12px 14px; border-radius: 8px; line-height: 1.55; font-size: 14px; white-space: pre-wrap; }}
     .user {{ justify-self: end; background: #1f6feb; color: #fff; }}
@@ -104,11 +118,13 @@ def chat() -> str:
     .meta {{ color: #667085; font-size: 12px; margin-top: 6px; }}
     .composer {{ border-top: 1px solid #dde2ea; padding: 14px; display: grid; grid-template-columns: 1fr 108px; gap: 10px; }}
     .composer textarea {{ min-height: 54px; max-height: 160px; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #fff; }}
+    .table-wrap {{ max-height: 500px; overflow: auto; margin-top: 10px; border: 1px solid #d8dee9; border-radius: 6px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }}
     th, td {{ border: 1px solid #d8dee9; padding: 8px; text-align: left; vertical-align: top; }}
-    th {{ background: #f7f9fc; font-weight: 650; }}
-    pre {{ margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111827; color: #e5e7eb; font-size: 12px; white-space: pre; }}
-    .logpanel {{ min-height: 640px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; }}
+    th {{ background: #f7f9fc; font-weight: 650; position: sticky; top: 0; z-index: 1; }}
+    pre {{ margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111827; color: #e5e7eb; font-size: 12px; white-space: normal; }}
+    .echarts-container {{ margin-top: 12px; width: 100%; min-height: 320px; background: #fff; border-radius: 6px; }}
+    .logpanel {{ flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }}
     .loghead {{ display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
     .loghead h2 {{ margin: 0; font-size: 16px; }}
     .loghint {{ color: #667085; font-size: 12px; }}
@@ -125,6 +141,7 @@ def chat() -> str:
       main {{ padding: 14px; }}
       header {{ display: block; }}
       .layout {{ grid-template-columns: 1fr; }}
+      .sidebar {{ height: auto; }}
       .chatbox, .logpanel {{ min-height: 520px; }}
       .msg {{ max-width: 100%; }}
       .composer {{ grid-template-columns: 1fr; }}
@@ -141,47 +158,40 @@ def chat() -> str:
       <div class="status">只读查询 · 自动注入 domain_id · 危险 SQL 拒绝</div>
     </header>
     <section class="layout">
-      <aside class="panel">
-        <div class="field">
-          <label for="domainId">domainId</label>
-          <input id="domainId" value="{escape(default_domain)}" autocomplete="off" />
-        </div>
-        <label class="check">
-          <input id="allowSql" type="checkbox" checked />
-          返回生成 SQL
-        </label>
-        <label class="check">
-          <input id="forceLlm" type="checkbox" />
-          强制尝试 LLM
-        </label>
-        <button class="primary" id="sideSend" type="button">发送查询</button>
-        <div class="examples">
-          <button class="example" type="button">支付订单总数是多少</button>
-          <button class="example" type="button">支付订单按渠道统计</button>
-          <button class="example" type="button">支付订单按状态统计</button>
-          <button class="example" type="button">各支付渠道交易金额分布</button>
-          <button class="example" type="button">近7天每日退款笔数趋势</button>
-          <button class="example" type="button">商户交易金额排名</button>
-        </div>
-      </aside>
+      <div class="sidebar">
+        <aside class="panel">
+          <div class="field">
+            <label for="domainId">domainId</label>
+            <input id="domainId" value="{escape(default_domain)}" autocomplete="off" />
+          </div>
+          <label class="check">
+            <input id="allowSql" type="checkbox" checked />
+            返回生成 SQL
+          </label>
+          <label class="check">
+            <input id="forceLlm" type="checkbox" />
+            强制尝试 LLM
+          </label>
+        </aside>
+        <aside class="logpanel">
+          <div class="loghead">
+            <h2>交互日志</h2>
+            <span class="loghint">LLM 请求 / 响应 / 耗时</span>
+          </div>
+          <div class="logs" id="logs">
+            <div class="emptylogs">暂无日志。发送查询后会显示本次是否调用 LLM、请求内容、响应内容和耗时。</div>
+          </div>
+        </aside>
+      </div>
       <section class="chatbox">
         <div class="messages" id="messages">
           <div class="msg assistant">输入自然语言问题后发送。当前默认组织域是 {escape(default_domain)}。</div>
         </div>
         <div class="composer">
-          <textarea id="question" placeholder="例如：支付订单按渠道统计"></textarea>
+          <textarea id="question" placeholder="您想问的我不一定都知道"></textarea>
           <button class="primary" id="send" type="button">发送</button>
         </div>
       </section>
-      <aside class="logpanel">
-        <div class="loghead">
-          <h2>交互日志</h2>
-          <span class="loghint">LLM 请求 / 响应 / 耗时</span>
-        </div>
-        <div class="logs" id="logs">
-          <div class="emptylogs">暂无日志。发送查询后会显示本次是否调用 LLM、请求内容、响应内容和耗时。</div>
-        </div>
-      </aside>
     </section>
   </main>
   <script>
@@ -193,8 +203,44 @@ def chat() -> str:
     const forceLlm = document.getElementById("forceLlm");
     const logs = document.getElementById("logs");
     const send = document.getElementById("send");
-    const sideSend = document.getElementById("sideSend");
     const conversationHistory = [];
+    const chartInstances = new Map();
+    const MAX_HISTORY = 5;
+    const questionHistory = [];
+    let historyIndex = -1;
+    let draftValue = "";
+
+    function rememberQuestion(text) {{
+      if (text && questionHistory[questionHistory.length - 1] !== text) {{
+        questionHistory.push(text);
+        if (questionHistory.length > MAX_HISTORY) questionHistory.shift();
+      }}
+      historyIndex = -1;
+      draftValue = question.value;
+    }}
+
+    function browseHistory(direction) {{
+      if (questionHistory.length === 0) return;
+      if (direction < 0) {{
+        if (historyIndex === -1) {{
+          draftValue = question.value;
+          historyIndex = questionHistory.length - 1;
+        }} else if (historyIndex > 0) {{
+          historyIndex -= 1;
+        }}
+      }} else {{
+        if (historyIndex === -1) return;
+        if (historyIndex < questionHistory.length - 1) {{
+          historyIndex += 1;
+        }} else {{
+          historyIndex = -1;
+          question.value = draftValue;
+          return;
+        }}
+      }}
+      question.value = questionHistory[historyIndex];
+      question.setSelectionRange(question.value.length, question.value.length);
+    }}
     domainId.value = domainId.value || defaultDomain;
 
     async function loadHealth() {{
@@ -208,12 +254,21 @@ def chat() -> str:
       }}
     }}
 
+    function isNearBottom(el, threshold = 40) {{
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    }}
+
+    function scrollToBottom(el) {{
+      el.scrollTop = el.scrollHeight;
+    }}
+
     function addMessage(role, html, extraClass = "") {{
+      const wasAtBottom = isNearBottom(messages);
       const node = document.createElement("div");
       node.className = `msg ${{role}} ${{extraClass}}`;
       node.innerHTML = html;
       messages.appendChild(node);
-      messages.scrollTop = messages.scrollHeight;
+      if (wasAtBottom) scrollToBottom(messages);
       return node;
     }}
 
@@ -237,15 +292,74 @@ def chat() -> str:
       const rows = table.rows.map((row) => {{
         return `<tr>${{table.columns.map((column) => `<td>${{escapeHtml(row[column])}}</td>`).join("")}}</tr>`;
       }}).join("");
-      return `<table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table>`;
+      return `<div class="table-wrap"><table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table></div>`;
     }}
 
-    function renderResult(data) {{
+    function extractEchartsOption(answer) {{
+      const match = answer.match(/```echarts\s*([\s\S]*?)```/);
+      if (!match) return null;
+      try {{
+        return JSON.parse(match[1].trim());
+      }} catch (error) {{
+        console.error("Failed to parse echarts option:", error);
+        return null;
+      }}
+    }}
+
+    function stripEchartsBlock(answer) {{
+      return answer.replace(/```echarts\s*[\s\S]*?```/g, "").trim();
+    }}
+
+    function createChartContainer(chartId) {{
+      return `<div id="${{chartId}}" class="echarts-container"></div>`;
+    }}
+
+    function renderEchartsChart(containerId, option, stickToBottom = false) {{
+      setTimeout(() => {{
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        
+        // Dispose existing chart if any
+        if (chartInstances.has(containerId)) {{
+          chartInstances.get(containerId).dispose();
+        }}
+        
+        const chart = echarts.init(container);
+        chart.setOption(option);
+        chartInstances.set(containerId, chart);
+        
+        if (stickToBottom) scrollToBottom(messages);
+        
+        // Handle resize
+        window.addEventListener("resize", () => {{
+          chart.resize();
+        }});
+      }}, 100);
+    }}
+
+    function renderResult(data, stickToBottom = false) {{
       const parts = [];
       parts.push(`<strong>${{escapeHtml(data.status)}}</strong>`);
-      if (data.answer) parts.push(`<div>${{escapeHtml(data.answer)}}</div>`);
+      
+      let answerText = data.answer || "";
+      const echartsOption = extractEchartsOption(answerText);
+      const cleanAnswer = stripEchartsBlock(answerText);
+      
+      if (cleanAnswer) {{
+        parts.push(`<div>${{escapeHtml(cleanAnswer)}}</div>`);
+      }}
+      
       if (data.rejectionReason) parts.push(`<div>${{escapeHtml(data.rejectionReason)}}</div>`);
       parts.push(renderTable(data.table));
+      
+      // Render chart if available
+      if (echartsOption) {{
+        const chartId = `chart-${{Date.now()}}-${{Math.random().toString(36).substr(2, 9)}}`;
+        parts.push(createChartContainer(chartId));
+        // Schedule chart rendering after DOM update
+        setTimeout(() => renderEchartsChart(chartId, echartsOption, stickToBottom), 0);
+      }}
+      
       if (data.generatedSql) parts.push(`<pre>${{escapeHtml(data.generatedSql)}}</pre>`);
       parts.push(`<div class="meta">queryId: ${{escapeHtml(data.queryId)}} · hitPath: ${{escapeHtml(data.hitPath)}} · ${{escapeHtml(data.elapsedMs)}} ms</div>`);
       return parts.filter(Boolean).join("");
@@ -334,8 +448,8 @@ def chat() -> str:
       }}
       addMessage("user", escapeHtml(text));
       question.value = "";
+      rememberQuestion(text);
       send.disabled = true;
-      sideSend.disabled = true;
       const pending = addMessage("assistant", "查询中...");
       try {{
         const response = await fetch("/v1/query", {{
@@ -351,8 +465,10 @@ def chat() -> str:
           }})
         }});
         const data = await response.json();
-        pending.innerHTML = response.ok ? renderResult(data) : escapeHtml(JSON.stringify(data, null, 2));
+        const stickToBottom = isNearBottom(messages);
+        pending.innerHTML = response.ok ? renderResult(data, stickToBottom) : escapeHtml(JSON.stringify(data, null, 2));
         renderInteractionLogs(data, text);
+        if (stickToBottom) scrollToBottom(messages);
         if (!response.ok) pending.classList.add("error");
         conversationHistory.push({{role: "user", content: text}});
         conversationHistory.push({{
@@ -365,21 +481,27 @@ def chat() -> str:
         pending.classList.add("error");
       }} finally {{
         send.disabled = false;
-        sideSend.disabled = false;
         question.focus();
       }}
     }}
 
-    document.querySelectorAll(".example").forEach((button) => {{
-      button.addEventListener("click", () => {{
-        question.value = button.textContent.trim();
-        question.focus();
-      }});
-    }});
+
     send.addEventListener("click", submitQuestion);
-    sideSend.addEventListener("click", submitQuestion);
     question.addEventListener("keydown", (event) => {{
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submitQuestion();
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {{
+        submitQuestion();
+        return;
+      }}
+      if (event.key === "ArrowUp" && question.value.indexOf(String.fromCharCode(10)) === -1) {{
+        event.preventDefault();
+        browseHistory(-1);
+        return;
+      }}
+      if (event.key === "ArrowDown" && question.value.indexOf(String.fromCharCode(10)) === -1) {{
+        event.preventDefault();
+        browseHistory(1);
+        return;
+      }}
     }});
     loadHealth();
   </script>

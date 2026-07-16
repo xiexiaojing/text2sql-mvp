@@ -1,9 +1,9 @@
 # Example only — copy values into .env.local (never commit .env.local).
 # The runtime reads LLM settings from environment variables, not this file directly.
-provider: openai_compatible
-base_url: https://your-llm-provider.example/v1/chat/completions
-model: your-model-name
-api_key_env: TEXT2SQL_LLM_API_KEY
-timeout_seconds: 8
-temperature: 0
-max_tokens: 900
+provider: openai_compatible          # LLM 提供方类型：openai_compatible（兼容 OpenAI 接口，同时支持 OpenAI 和 Anthropic 传输）
+base_url: https://your-llm-provider.example/v1/chat/completions  # LLM 服务的 chat completions 端点 URL
+model: your-model-name               # 调用的模型名称
+api_key_env: TEXT2SQL_LLM_API_KEY     # API Key 对应的环境变量名（运行时从该环境变量读取密钥，避免明文写入配置）
+timeout_seconds: 8                    # 单次 LLM 请求超时时间（秒）
+temperature: 0                        # 采样温度，0 表示确定性输出（适合 SQL 生成场景）
+max_tokens: 900                       # 单次响应最大 token 数
