@@ -48,3 +48,50 @@ tables:
     joins:                            # 允许的 JOIN 路径
       - {to_table: sys_user, on: sys_dept.dept_id = sys_user.dept_id}  # 部门-用户
       - {to_table: sys_dept, on: sys_dept.parent_id = sys_dept.dept_id}  # 部门自关联（查父子关系）
+
+  - name: tb_itzcbd                   # 物理表名：IT 资产表
+    object: Asset                      # 实体对象名
+    display_name: IT资产               # 表显示名称
+    row_count_estimate: 20000         # 预估行数（按资产规模估计，可按实际调整）
+    columns:                          # 允许访问的列列表
+      - {name: id, display_name: 主键ID}                              # 主键ID（自增长）
+      - {name: create_by, display_name: 创建人}                      # 创建人
+      - {name: create_time, display_name: 创建时间}                  # 创建时间
+      - {name: update_by, display_name: 更新人}                      # 更新人
+      - {name: update_name, display_name: 修改人}                    # 修改人
+      - {name: update_time, display_name: 更新时间}                  # 更新时间
+      - {name: del_flag, display_name: 删除标志}                     # 删除标志（0存在 1删除）
+      - {name: zcxl, display_name: 资产小类}                         # 资产小类
+      - {name: pp, display_name: 品牌}                              # 品牌
+      - {name: xh, display_name: 型号}                              # 型号
+      - {name: pz, display_name: 配置}                              # 配置
+      - {name: xlh, display_name: 序列号}                           # 序列号
+      - {name: dj, display_name: 单价}                              # 单价
+      - {name: cwsszt, display_name: 财务所属主体}                   # 财务所属主体
+      - {name: cfdd, display_name: 存放地点}                         # 存放地点
+      - {name: zcqyrq, display_name: 资产启用日期}                   # 资产启用日期
+      - {name: ddbh, display_name: 合同编号}                         # 合同编号
+      - {name: gys, display_name: 供应商}                           # 供应商
+      - {name: cgrq, display_name: 采购日期}                         # 采购日期
+      - {name: PObh, display_name: PO编号}                         # PO编号
+      - {name: ysdh, display_name: 验收单号}                         # 验收单号
+      - {name: zcjz, display_name: 税率}                            # 税率
+      - {name: zjnx, display_name: 折旧年限}                         # 折旧年限
+      - {name: bqh, display_name: 标签号}                            # 标签号（唯一索引）
+      - {name: zczt, display_name: 资产状态}                         # 资产状态
+      - {name: wxjl, display_name: 维修记录}                         # 维修记录
+      - {name: zcyz, display_name: 资产原值}                         # 资产原值
+      - {name: user_id, display_name: 所属人}                        # 所属人
+      - {name: dept_id, display_name: 所属人部门}                     # 所属人部门
+      - {name: bz, display_name: 备注}                              # 备注
+      - {name: zczl, display_name: 资产中类}                         # 资产中类
+      - {name: zcly, display_name: 资产来源}                         # 资产来源
+      - {name: jOAxtbm, display_name: 旧OA系统编码}                  # 旧OA系统编码
+      - {name: dqcb, display_name: 当前成本}                         # 当前成本
+      - {name: fj, display_name: 附件}                              # 附件
+      - {name: zcczrq, display_name: 资产处置日期}                   # 资产处置日期
+      - {name: zcxle, display_name: 资产小类二}                      # 资产小类二
+    indexes:                          # 表索引列表
+      - {name: tb_itzcbd_UN_bqh, columns: [bqh]}                    # bqh 唯一索引
+    joins: []                          # 当前模板不跨表 JOIN（部门编号直接取自本表 dept_id）
+

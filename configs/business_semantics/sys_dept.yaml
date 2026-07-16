@@ -1,0 +1,52 @@
+version: 1
+notes:
+  - 部门表
+
+entities:
+  User:
+    tables: [sys_user]
+  Dept:
+    tables: [sys_dept]
+
+
+intents:
+
+  # ==================== 部门总数 ====================
+  # 高优先级 + match_none 排除用户相关词，确保 "各部门有多少用户" 不会被本意图抢走
+  - id: dept_count
+    display_name: 部门总数
+    status: executable
+    priority: 92
+    match:
+      all: ["部门"]
+      any: ["总数", "有多少", "数量", "多少", "几个"]
+      none: ["用户", "员工", "人员", "男女", "性别"]
+    examples:
+      - "部门总数是多少"
+      - "有多少个部门"
+      - "部门数量"
+    semantic:
+      queries:
+        - "统计部门总数"
+        - "部门一共有多少"
+    ontology_refs: [Dept]
+    physical_tables: [sys_dept]
+    output_type: scalar_count
+    template: dept_count
+
+
+
+
+
+sql_templates:
+  # --- 部门总数 ---
+  dept_count:
+    plan: 统计部门总数。
+    sql: >
+      SELECT COUNT(*) AS total
+      FROM sys_dept d
+      WHERE d.del_flag = 0
+
+
+
+

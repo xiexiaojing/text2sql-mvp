@@ -29,6 +29,8 @@ allowed_functions:                    # SQL 中允许使用的函数白名单（
   - nullif                            # 两值相等则返回 NULL
   - ifnull                            # NULL 值替换
   - coalesce                          # 返回第一个非 NULL 值
+  - cast                              # 类型转换（如 CAST(列 AS DECIMAL)，用于 VARCHAR 数值列聚合）
+  - decimal                           # CAST 目标类型（CAST(列 AS DECIMAL(18,2))）
   - substring_index                   # 按分隔符截取子串
   - concat                            # 字符串拼接
   - distinct                          # 去重

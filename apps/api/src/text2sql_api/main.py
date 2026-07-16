@@ -82,7 +82,8 @@ def chat() -> str:
     header {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 18px; }}
     h1 {{ margin: 0; font-size: 24px; font-weight: 700; }}
     .status {{ color: #5d6678; font-size: 13px; }}
-    .layout {{ display: grid; grid-template-columns: 300px minmax(0, 1fr) 430px; gap: 16px; align-items: start; }}
+    .layout {{ display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: stretch; }}
+    .sidebar {{ display: flex; flex-direction: column; gap: 16px; height: calc(100vh - 115px); min-height: 0; }}
     .panel, .chatbox, .logpanel {{ background: #fff; border: 1px solid #dde2ea; border-radius: 8px; }}
     .panel, .logpanel {{ padding: 16px; }}
     label {{ display: block; margin-bottom: 6px; color: #485368; font-size: 13px; font-weight: 600; }}
@@ -109,8 +110,6 @@ def chat() -> str:
     }}
     .primary {{ width: 100%; background: #1f6feb; color: #fff; }}
     .primary:disabled {{ background: #94a3b8; cursor: wait; }}
-    .examples {{ display: grid; gap: 8px; margin-top: 16px; }}
-    .example {{ text-align: left; color: #1f3b63; background: #edf4ff; }}
     .chatbox {{ height: calc(100vh - 115px); display: flex; flex-direction: column; overflow: hidden; }}
     .messages {{ flex: 1; padding: 18px; overflow: auto; display: grid; align-content: start; gap: 12px; }}
     .msg {{ max-width: 88%; padding: 12px 14px; border-radius: 8px; line-height: 1.55; font-size: 14px; white-space: pre-wrap; }}
@@ -119,12 +118,13 @@ def chat() -> str:
     .meta {{ color: #667085; font-size: 12px; margin-top: 6px; }}
     .composer {{ border-top: 1px solid #dde2ea; padding: 14px; display: grid; grid-template-columns: 1fr 108px; gap: 10px; }}
     .composer textarea {{ min-height: 54px; max-height: 160px; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: #fff; }}
+    .table-wrap {{ max-height: 500px; overflow: auto; margin-top: 10px; border: 1px solid #d8dee9; border-radius: 6px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }}
     th, td {{ border: 1px solid #d8dee9; padding: 8px; text-align: left; vertical-align: top; }}
-    th {{ background: #f7f9fc; font-weight: 650; }}
+    th {{ background: #f7f9fc; font-weight: 650; position: sticky; top: 0; z-index: 1; }}
     pre {{ margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 6px; background: #111827; color: #e5e7eb; font-size: 12px; white-space: normal; }}
     .echarts-container {{ margin-top: 12px; width: 100%; min-height: 320px; background: #fff; border-radius: 6px; }}
-    .logpanel {{ height: calc(100vh - 115px); display: flex; flex-direction: column; overflow: hidden; }}
+    .logpanel {{ flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }}
     .loghead {{ display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
     .loghead h2 {{ margin: 0; font-size: 16px; }}
     .loghint {{ color: #667085; font-size: 12px; }}
@@ -141,6 +141,7 @@ def chat() -> str:
       main {{ padding: 14px; }}
       header {{ display: block; }}
       .layout {{ grid-template-columns: 1fr; }}
+      .sidebar {{ height: auto; }}
       .chatbox, .logpanel {{ min-height: 520px; }}
       .msg {{ max-width: 100%; }}
       .composer {{ grid-template-columns: 1fr; }}
@@ -157,47 +158,40 @@ def chat() -> str:
       <div class="status">只读查询 · 自动注入 domain_id · 危险 SQL 拒绝</div>
     </header>
     <section class="layout">
-      <aside class="panel">
-        <div class="field">
-          <label for="domainId">domainId</label>
-          <input id="domainId" value="{escape(default_domain)}" autocomplete="off" />
-        </div>
-        <label class="check">
-          <input id="allowSql" type="checkbox" checked />
-          返回生成 SQL
-        </label>
-        <label class="check">
-          <input id="forceLlm" type="checkbox" />
-          强制尝试 LLM
-        </label>
-        <button class="primary" id="sideSend" type="button">发送查询</button>
-        <div class="examples">
-          <button class="example" type="button">支付订单总数是多少</button>
-          <button class="example" type="button">支付订单按渠道统计</button>
-          <button class="example" type="button">支付订单按状态统计</button>
-          <button class="example" type="button">各支付渠道交易金额分布</button>
-          <button class="example" type="button">近7天每日退款笔数趋势</button>
-          <button class="example" type="button">商户交易金额排名</button>
-        </div>
-      </aside>
+      <div class="sidebar">
+        <aside class="panel">
+          <div class="field">
+            <label for="domainId">domainId</label>
+            <input id="domainId" value="{escape(default_domain)}" autocomplete="off" />
+          </div>
+          <label class="check">
+            <input id="allowSql" type="checkbox" checked />
+            返回生成 SQL
+          </label>
+          <label class="check">
+            <input id="forceLlm" type="checkbox" />
+            强制尝试 LLM
+          </label>
+        </aside>
+        <aside class="logpanel">
+          <div class="loghead">
+            <h2>交互日志</h2>
+            <span class="loghint">LLM 请求 / 响应 / 耗时</span>
+          </div>
+          <div class="logs" id="logs">
+            <div class="emptylogs">暂无日志。发送查询后会显示本次是否调用 LLM、请求内容、响应内容和耗时。</div>
+          </div>
+        </aside>
+      </div>
       <section class="chatbox">
         <div class="messages" id="messages">
           <div class="msg assistant">输入自然语言问题后发送。当前默认组织域是 {escape(default_domain)}。</div>
         </div>
         <div class="composer">
-          <textarea id="question" placeholder="例如：支付订单按渠道统计"></textarea>
+          <textarea id="question" placeholder="您想问的我不一定都知道"></textarea>
           <button class="primary" id="send" type="button">发送</button>
         </div>
       </section>
-      <aside class="logpanel">
-        <div class="loghead">
-          <h2>交互日志</h2>
-          <span class="loghint">LLM 请求 / 响应 / 耗时</span>
-        </div>
-        <div class="logs" id="logs">
-          <div class="emptylogs">暂无日志。发送查询后会显示本次是否调用 LLM、请求内容、响应内容和耗时。</div>
-        </div>
-      </aside>
     </section>
   </main>
   <script>
@@ -209,7 +203,6 @@ def chat() -> str:
     const forceLlm = document.getElementById("forceLlm");
     const logs = document.getElementById("logs");
     const send = document.getElementById("send");
-    const sideSend = document.getElementById("sideSend");
     const conversationHistory = [];
     const chartInstances = new Map();
     const MAX_HISTORY = 5;
@@ -299,7 +292,7 @@ def chat() -> str:
       const rows = table.rows.map((row) => {{
         return `<tr>${{table.columns.map((column) => `<td>${{escapeHtml(row[column])}}</td>`).join("")}}</tr>`;
       }}).join("");
-      return `<table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table>`;
+      return `<div class="table-wrap"><table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table></div>`;
     }}
 
     function extractEchartsOption(answer) {{
@@ -457,7 +450,6 @@ def chat() -> str:
       question.value = "";
       rememberQuestion(text);
       send.disabled = true;
-      sideSend.disabled = true;
       const pending = addMessage("assistant", "查询中...");
       try {{
         const response = await fetch("/v1/query", {{
@@ -489,19 +481,12 @@ def chat() -> str:
         pending.classList.add("error");
       }} finally {{
         send.disabled = false;
-        sideSend.disabled = false;
         question.focus();
       }}
     }}
 
-    document.querySelectorAll(".example").forEach((button) => {{
-      button.addEventListener("click", () => {{
-        question.value = button.textContent.trim();
-        question.focus();
-      }});
-    }});
+
     send.addEventListener("click", submitQuestion);
-    sideSend.addEventListener("click", submitQuestion);
     question.addEventListener("keydown", (event) => {{
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {{
         submitQuestion();

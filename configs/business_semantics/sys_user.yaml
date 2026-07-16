@@ -1,0 +1,276 @@
+version: 1
+notes:
+  - 用户表
+
+
+entities:
+  User:
+    tables: [sys_user]
+  Dept:
+    tables: [sys_dept]
+
+
+intents:
+
+  # ==================== 用户人数统计（全局 / 指定部门） ====================
+  # 合并原 user_count + user_count_by_dept，通过可选 dept_name 槽位区分：
+  #   "用户人数" / "用户总数" / "多少人"        → 无 dept_name → 统计全部用户
+  #   "集团人数" / "人力资源中心人数" / "销售部有多少人" → 有 dept_name → 按部门过滤
+  - id: user_count
+    display_name: 用户人数
+    status: executable
+    priority: 88
+    match:
+      any:
+        - "用户数"
+        - "人数"
+        - "有多少人"
+        - "多少人"
+        - "用户总数"
+        - "员工数"
+        - "员工人数"
+        - "人员数"
+        - "人员总数"
+        - "统计人数"
+        - "有几个"
+        - "有几"
+        - "多少用户"
+        - "多少员工"
+        - "多少人员"
+        - "总人数"
+      none:
+        - "各部门"
+        - "下级部门"
+        - "下属"
+        - "下级"
+        - "子部门"
+        - "各中心"
+    examples:
+      - "用户人数"
+      - "用户总数"
+      - "集团人数"
+      - "集团有多少人"
+      - "人力资源中心人数"
+      - "销售部有多少人"
+      - "有多少用户"
+      - "有多少员工"
+    semantic:
+      queries:
+        - "统计用户总数"
+        - "用户一共有多少"
+        - "集团人员数"
+        - "某部门人数"
+        - "查询用户人数"
+    ontology_refs: [User]
+    physical_tables: [sys_user]
+    optional_slots: [dept_name]
+    slot_defaults: {}
+    output_type: scalar_count
+    template: user_count
+
+  # ==================== 用户男女比例（全局 / 指定部门） ====================
+  # 同样使用可选 dept_name 槽位：
+  #   "男女比例" / "性别分布"              → 全局
+  #   "集团男女比例" / "销售部性别分布"    → 按部门过滤
+  - id: user_sex_ratio
+    display_name: 用户男女比例（支持按部门过滤）
+    status: executable
+    priority: 87
+    match:
+      any:
+        - "男女比例"
+        - "性别比例"
+        - "男女分布"
+        - "性别分布"
+        - "男女"
+        - "性别"
+        - "男女人数"
+        - "性别构成"
+        - "男女各有多少"
+        - "性别统计"
+    examples:
+      - "男女比例"
+      - "性别比例"
+      - "用户男女比例"
+      - "集团男女比例"
+      - "人力资源中心男女比例"
+      - "销售部性别分布"
+      - "男女各有多少"
+    semantic:
+      queries:
+        - "按性别统计用户"
+        - "用户性别构成"
+        - "男女员工比例"
+        - "某部门性别分布"
+    ontology_refs: [User]
+    physical_tables: [sys_user]
+    optional_slots: [dept_name]
+    slot_defaults: {}
+    output_type: grouped_count
+    template: user_sex_ratio
+
+
+  # ==================== 用户/人员列表（全局 / 指定部门） ====================
+  # 合并"人员列表"与"某部门人员列表"，通过可选 dept_name 槽位区分：
+  #   "人员列表" / "用户名单" / "花名册"        → 无 dept_name → 列出全部用户
+  #   "销售部人员列表" / "某部门人员名单"        → 有 dept_name → 按部门过滤
+  - id: user_list
+    display_name: 人员列表（支持按部门过滤）
+    status: executable
+    priority: 86
+    match:
+      any:
+        - "人员列表"
+        - "用户列表"
+        - "员工列表"
+        - "人员名单"
+        - "用户名单"
+        - "员工名单"
+        - "花名册"
+        - "名单"
+        - "通讯录"
+        - "员工"
+        - "人员"
+      none:
+        - "人数"
+        - "多少"
+        - "总数"
+        - "统计"
+        - "男女"
+        - "性别"
+    examples:
+      - "人员列表"
+      - "用户名单"
+      - "集团人员列表"
+      - "销售部人员列表"
+      - "某部门人员列表"
+      - "人力资源中心花名册"
+    semantic:
+      queries:
+        - "列出所有用户"
+        - "某部门有哪些人"
+        - "查询销售部员工名单"
+        - "部门人员通讯录"
+    ontology_refs: [User]
+    physical_tables: [sys_user]
+    optional_slots: [dept_name]
+    slot_defaults: {}
+    output_type: list
+    template: user_list
+
+
+  # ==================== 指定部门下级各部门人数 ====================
+  # 区别于 user_by_dept（全量分组）：本意图需要提取 parent_dept_name，只查该部门的下级
+  - id: user_by_parent_dept
+    display_name: 指定部门下级所有部门人数
+    status: executable
+    priority: 88
+    match:
+      any:
+        - "下级"
+        - "下属"
+        - "直属"
+        - "子部门"
+        - "下属部门"
+        - "下级部门"
+        - "各部门人数"
+        - "各中心人数"
+        - "有哪些部门"
+    examples:
+      - "某部门下级各部门人数"
+      - "技术中心下属部门人数"
+      - "财务部下级部门人数"
+      - "人力资源中心子部门人数"
+    semantic:
+      queries:
+        - "某部门下级人数分布"
+        - "指定部门子部门人员统计"
+    ontology_refs: [User, Dept]
+    physical_tables: [sys_user, sys_dept]
+    required_slots: [parent_dept_name]
+    slot_defaults:
+      parent_dept_name: 易鑫集团
+    output_type: grouped_count
+    template: user_by_parent_dept
+
+
+
+
+sql_templates:
+  # ==================== 用户/部门域 ====================
+
+  # --- 合并 user_count + user_count_by_dept ---
+  # 通过 [[dept_name:...]] 可选块：当 LLM/启发式提取到 dept_name 时附加 JOIN + WHERE 过滤；
+  # 当 dept_name 为空（如问 "用户人数"）时，整段被移除，等价于统计全量用户。
+  user_count:
+    plan: 统计未删除的用户总数，可选按部门全称模糊过滤。
+    params:
+      dept_name: dept_name
+    sql: >
+      SELECT COUNT(*) AS total
+      FROM sys_user u
+      [[dept_name:JOIN sys_dept d ON u.dept_id = d.dept_id]]
+      WHERE u.status = 0
+      [[dept_name:AND d.del_flag = 0 AND d.dept_long_name like concat('%', %(dept_name)s, '%')]]
+
+
+  # --- 用户男女比例（全局 / 按部门过滤） ---
+  user_sex_ratio:
+    plan: "按性别分组统计用户数量（sex: 0男 1女 2未知），可选按部门全称模糊过滤。"
+    params:
+      dept_name: dept_name
+    sql: >
+      SELECT
+        CASE u.sex
+          WHEN 0 THEN '男'
+          WHEN 1 THEN '女'
+          ELSE '未知'
+        END AS sex_name,
+        COUNT(*) AS total
+      FROM sys_user u
+      [[dept_name:JOIN sys_dept d ON u.dept_id = d.dept_id]]
+      WHERE u.status = 0
+      [[dept_name:AND d.del_flag = 0 AND d.dept_long_name like concat('%', %(dept_name)s, '%')]]
+      GROUP BY u.sex
+      ORDER BY total DESC
+
+
+  # --- 用户/人员列表（全局 / 按部门过滤） ---
+  user_list:
+    plan: 查询用户基本信息列表（工号、姓名、账号、性别、工作地点），可选按部门全称模糊过滤，默认最多返回 10 条。
+    params:
+      dept_name: dept_name
+    sql: >
+      SELECT
+        u.user_id AS 工号,
+        u.nick_name AS 姓名,
+        u.user_name AS 账号,
+        u.work_city AS 工作地点,
+        d.dept_long_name AS 部门
+      FROM sys_user u
+      [[dept_name:JOIN sys_dept d ON u.dept_id = d.dept_id]]
+      WHERE u.status = 0 AND u.del_flag = 0
+      [[dept_name:AND d.del_flag = 0 AND d.dept_long_name like concat('%', %(dept_name)s, '%')]]
+      ORDER BY u.user_id
+
+
+  # --- 指定部门所有下级各部门人数 ---
+  user_by_parent_dept:
+    plan: "查询指定部门所有下级各部门人数，通过 sys_dept 自关联 d.parent_id = parent.dept_id 解析父子关系。"
+    params:
+      parent_dept_name: parent_dept_name
+    sql: >
+      SELECT t.dept_name, COUNT(u.user_id) AS total
+      FROM sys_dept t
+      LEFT JOIN sys_dept u_dept ON (t.dept_id = u_dept.dept_id OR FIND_IN_SET(t.dept_id, u_dept.ancestors))
+      LEFT JOIN sys_user u ON u_dept.dept_id = u.dept_id
+      WHERE t.parent_id = (
+        select dept_id 
+        from sys_dept
+        where dept_long_name like concat('%', %(parent_dept_name)s, '%')
+        and status = 0
+        order by dept_lvl 
+        limit 1
+      )
+      GROUP BY t.dept_name;
+
