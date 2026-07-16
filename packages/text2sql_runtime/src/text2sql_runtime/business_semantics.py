@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import datetime as dt
-import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-_logger = logging.getLogger(__name__)
-
-from .address_parser import build_room_name_path_likes, parse_room_address
 from .entity_query import EntityQueryCompiler
 from .intent_vector import IntentVectorCandidate, IntentVectorIndex, build_intent_vector_index
 from .models import GeneratedSql, RejectedQuery
@@ -179,7 +174,6 @@ class BusinessSemanticIndex:
         if self._llm_slot_policy not in {"auto", "always", "never"}:
             self._llm_slot_policy = "auto"
         self._refresh_vector_index()
-        self._best_intent_last_question: str | None = None  # dedup detailed scoring logs
 
     @classmethod
     def from_config(
@@ -279,53 +273,18 @@ class BusinessSemanticIndex:
             matched = self._best_intent(question) # 意图识别结果
             if matched is not None:
                 intent, confidence = matched
-                # Try LLM slot extraction even in legacy keyword path.
-                # But first check if the question actually contains content beyond keywords.
-                # "有多少人" has no dept_name → skip LLM, instant fallback to defaults.
-                # "人力资源中心有多少人" has "人力资源中心" → worth calling LLM.
-                extracted_slots: dict[str, Any] = {}
-                use_heuristic = True
-                slot_source = "legacy_keywords_vector_disabled"
-                slot_elapsed_ms = 0
-                if self._llm_configured and self._llm_slot_policy != "never":
-                    # Skip LLM entirely when the intent has no slots to fill
-                    # (e.g. user_sex_ratio, user_count, dept_count, user_by_dept).
-                    if intent.required_slots or intent.optional_slots:
-                        if self._has_slot_content(question, intent): # 去掉match后是否有插槽
-                            print(f"\n[插槽流] 调用 LLM 提取器 for intent={intent.intent_id}, "
-                                  f"required_slots={intent.required_slots}, optional_slots={intent.optional_slots}",
-                                  flush=True)
-                            # 过滤非空项
-                            legacy_candidates = [self._legacy_candidate_projection(intent)]
-                            # llm 提取
-                            llm_result = self._extract_slots_with_llm(question, legacy_candidates, history)
-                            if llm_result is not None:
-                                extracted_slots = llm_result.slots
-                                use_heuristic = False
-                                slot_source = "llm_legacy"
-                                slot_elapsed_ms = llm_result.elapsed_ms
-                                print(f"[SLOT-FLOW] LLM 返回插槽结果: decision={llm_result.decision}, "
-                                      f"intent_id={llm_result.intent_id}, slots={llm_result.slots}",
-                                      flush=True)
-                            else:
-                                print(f"[SLOT-FLOW] LLM 返回 None, 将回退到启发式关键词", flush=True)
-                
-                # 返回所有slots
+                if not self._passes_lexical_only_gate(question, intent, confidence):
+                    return SemanticPlan(
+                        status="unsupported",
+                        reason=UNCONFIGURED_SEMANTIC_REASON,
+                        elapsed_ms=self._elapsed_ms(started),
+                        slot_source="legacy_keywords_rejected",
+                    )
                 slots = self._complete_slots(
                     question,
                     intent,
-                    extracted_slots,
-                    use_heuristic=use_heuristic,
-                )
-                # 打印日志
-                _log_plan_result(
-                    question=question,
-                    status=intent.status,
-                    intent_id=intent.intent_id,
-                    display_name=intent.display_name,
-                    slot_source=slot_source,
-                    confidence=confidence,
-                    elapsed_ms=self._elapsed_ms(started),
+                    {},
+                    use_heuristic=True,
                 )
                 return self._build_plan(
                     question,
@@ -336,18 +295,11 @@ class BusinessSemanticIndex:
                     candidate_intents=[],
                     matched_query=None,
                     vector_distance=None,
-                    slot_source=slot_source,
-                    slot_elapsed_ms=slot_elapsed_ms,
+                    slot_source="legacy_keywords_vector_disabled",
+                    slot_elapsed_ms=0,
                 )
 
         if not candidates:
-            _log_plan_result(
-                question=question,
-                status="unsupported",
-                slot_source="vector_no_candidate" if self.vector_index.enabled else "legacy_no_candidate",
-                elapsed_ms=self._elapsed_ms(started),
-                reason=UNCONFIGURED_SEMANTIC_REASON,
-            )
             return SemanticPlan(
                 status="unsupported",
                 reason=UNCONFIGURED_SEMANTIC_REASON,
@@ -373,13 +325,6 @@ class BusinessSemanticIndex:
         else:
             extraction = self._extract_slots_with_llm(question, candidate_intents, history)
         if extraction and extraction.decision == "fallback":
-            _log_plan_result(
-                question=question,
-                status="unsupported",
-                slot_source=extraction.source,
-                elapsed_ms=self._elapsed_ms(started),
-                reason=extraction.reason or UNCONFIGURED_SEMANTIC_REASON,
-            )
             return SemanticPlan(
                 status="unsupported",
                 reason=extraction.reason or UNCONFIGURED_SEMANTIC_REASON,
@@ -447,16 +392,35 @@ class BusinessSemanticIndex:
             extraction.slots if extraction else {},
         )
 
-        _log_plan_result(
-            question=question,
-            status=intent.status,
-            intent_id=intent.intent_id,
-            display_name=intent.display_name,
-            slot_source=slot_source,
-            confidence=confidence,
-            vector_distance=round(selected_candidate.distance, 4),
-            elapsed_ms=self._elapsed_ms(started),
-        )
+        if intent.status == "executable" and llm_selected:
+            if llm_confidence < self.routing.min_llm_select_confidence and not self._passes_executable_routing_gate(
+                question,
+                intent,
+                selected_candidate,
+                candidates,
+            ):
+                return SemanticPlan(
+                    status="unsupported",
+                    reason=UNCONFIGURED_SEMANTIC_REASON,
+                    elapsed_ms=self._elapsed_ms(started),
+                    candidate_intents=candidate_intents,
+                    slot_source=f"{slot_source}_llm_low_confidence",
+                    slot_elapsed_ms=slot_elapsed_ms,
+                )
+        elif intent.status == "executable" and not llm_selected and not self._passes_executable_routing_gate(
+            question,
+            intent,
+            selected_candidate,
+            candidates,
+        ):
+            return SemanticPlan(
+                status="unsupported",
+                reason=UNCONFIGURED_SEMANTIC_REASON,
+                elapsed_ms=self._elapsed_ms(started),
+                candidate_intents=candidate_intents,
+                slot_source=f"{slot_source}_routing_rejected",
+                slot_elapsed_ms=slot_elapsed_ms,
+            )
 
         return self._build_plan(
             question,
@@ -544,10 +508,8 @@ class BusinessSemanticIndex:
 
     def _candidate_intents(self, question: str) -> list[IntentVectorCandidate]:
         if not self.vector_index.enabled:
-            _logger.info("[CANDIDATE] vector 禁用, returning []")
             return []
         if not self._refresh_vector_index():
-            _logger.info("[CANDIDATE] vector refresh failed, returning []")
             return []
         candidates = [
             candidate
@@ -557,18 +519,8 @@ class BusinessSemanticIndex:
             )
             if candidate.intent_id in self._intents_by_id
         ]
-        _logger.info("[CANDIDATE] ← %r → vector raw candidates (%d): %s",
-                     question, len(candidates),
-                     [(c.intent_id, round(c.distance, 4)) for c in candidates])
         lexical = self._lexical_candidate(question)
         if lexical:
-            merged_count = sum(1 for c in candidates if c.intent_id == lexical.intent_id)
-            if merged_count > 0:
-                _logger.info("[CANDIDATE] lexical merge: %s keyword distance=%.4f overlapped=%d",
-                            lexical.intent_id, lexical.distance, merged_count)
-            else:
-                _logger.info("[CANDIDATE] lexical merge: %s keyword distance=%.4f appended as new",
-                            lexical.intent_id, lexical.distance)
             candidates = [
                 lexical
                 if candidate.intent_id == lexical.intent_id and lexical.distance < candidate.distance
@@ -577,17 +529,13 @@ class BusinessSemanticIndex:
             ]
             if all(candidate.intent_id != lexical.intent_id for candidate in candidates):
                 candidates.append(lexical)
-        sorted_candidates = sorted(
+        return sorted(
             candidates,
             key=lambda candidate: (
                 candidate.distance,
                 -self._intents_by_id[candidate.intent_id].priority,
             ),
         )
-        _logger.info("[CANDIDATE] final ranking: %s",
-                     [(c.intent_id, round(c.distance, 4), self._intents_by_id[c.intent_id].priority)
-                      for c in sorted_candidates])
-        return sorted_candidates
 
     def _candidate_projection(self, candidate: IntentVectorCandidate) -> dict[str, Any]:
         intent = self._intents_by_id[candidate.intent_id]
@@ -621,24 +569,6 @@ class BusinessSemanticIndex:
                 return candidate
         return None
 
-    @staticmethod
-    def _legacy_candidate_projection(intent: BusinessIntent) -> dict[str, Any]:
-        """Build a candidate dict from a BusinessIntent for the legacy (no vector) LLM path."""
-        result: dict[str, Any] = {
-            "id": intent.intent_id,
-            "display_name": intent.display_name,
-            "status": intent.status,
-            "output_type": intent.output_type,
-            "required_slots": list(intent.required_slots),
-            "optional_slots": list(intent.optional_slots),
-            "slot_defaults": dict(intent.slot_defaults),
-            "allowed_slots": sorted(
-                set(intent.required_slots) | set(intent.optional_slots) | set(intent.slot_defaults)
-            ),
-            "examples": list(intent.examples)[:4],
-        }
-        return {key: value for key, value in result.items() if value not in ("", [], {}, None)}
-
     def _extract_slots_with_llm(
         self,
         question: str,
@@ -658,16 +588,13 @@ class BusinessSemanticIndex:
         use_heuristic: bool,
     ) -> dict[str, Any]:
         slots: dict[str, Any] = dict(intent.slot_defaults)
-        print(f"[SLOT-FLOW] _complete_slots: defaults={slots}, use_heuristic={use_heuristic}", flush=True)
         if use_heuristic:
             for key, value in self._extract_slots(question, intent).items():
                 if not _empty(value):
                     slots[key] = value
-            print(f"[SLOT-FLOW] _complete_slots: 启发后的插槽={slots}", flush=True)
         for key, value in extracted_slots.items():
             if not _empty(value):
                 slots[key] = value
-        print(f"[SLOT-FLOW] _complete_slots: 合并LLM后的插槽={slots}", flush=True)
         self._derive_slots(intent, slots)
         if intent.template_id == "dynamic_entity_query":
             self.entity_query_compiler.complete_slots(question, slots)
@@ -681,34 +608,11 @@ class BusinessSemanticIndex:
         return slots
 
     def _derive_slots(self, intent: BusinessIntent, slots: dict[str, Any]) -> None:
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots and _empty(slots.get("age")):
-            slots["age"] = 60
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if not _empty(slots.get("sexual")):
-            normalized_sexual = _normalize_sexual(str(slots["sexual"]))
-            if normalized_sexual:
-                slots["sexual"] = normalized_sexual
-        if not _empty(slots.get("marital_status")):
-            normalized_marital_status = _normalize_marital_status(str(slots["marital_status"]))
-            if normalized_marital_status:
-                slots["marital_status"] = normalized_marital_status
-        like_slots = {
-            "merchant_name": "merchant_name_like",
-            "person_name": "person_name_like",
-        }
-        for slot_name, like_slot in like_slots.items():
-            if not _empty(slots.get(like_slot)):
-                slots[like_slot] = _normalize_like_value(str(slots[like_slot]))
-            elif not _empty(slots.get(slot_name)):
-                slots[like_slot] = _like_value(str(slots[slot_name]))
-                
+        derive_slots(
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slots=slots,
+        )
 
     def _intent_vector_payload(self, intent: BusinessIntent) -> dict[str, Any]:
         semantic: dict[str, Any] = {
@@ -782,198 +686,110 @@ class BusinessSemanticIndex:
             for intent in self.intents
         ]
 
-    @staticmethod
-    def _has_slot_content(question: str, intent: BusinessIntent) -> bool:
-        """Check if question has content beyond known match keywords that could be a slot value.
-
-        "有多少人" → only keywords, no slot content → False (skip LLM, instant fallback)
-        "人力资源中心有多少人" → has "人力资源中心" beyond keywords → True (call LLM)
-        """
-        stripped = question.strip()
-        # Remove all known match_any keywords from the question
-        for keyword in sorted(intent.match_any, key=len, reverse=True):
-            stripped = stripped.replace(keyword, "")
-        # Remove match_all keywords
-        for keyword in intent.match_all:
-            stripped = stripped.replace(keyword, "")
-        # Remove known prefixes/suffixes that are not slot values
-        stripped = re.sub(r"^[的]?", "", stripped)
-        stripped = stripped.strip()
-        print(f"[插槽] _has_slot_content: question={question!r}, intent={intent.intent_id}, "
-              f"match_any={intent.match_any}, stripped={stripped!r}, result={len(stripped) >= 1}",
-              flush=True)
-        return len(stripped) >= 1
-
     def _best_intent(self, question: str) -> tuple[BusinessIntent, float] | None:
         scored: list[tuple[int, int, BusinessIntent]] = []
-        debug_lines: list[str] = []
         lowered = question.lower()
         for order, intent in enumerate(self.intents):
-            # ----- exclusion by match_none -----
             if any(keyword.lower() in lowered for keyword in intent.match_none):
-                debug_lines.append(
-                    f"  跳过 {intent.intent_id}: match_none exclusion"
-                )
                 continue
-            # ----- exclusion by match_all -----
             if intent.match_all and not all(keyword.lower() in lowered for keyword in intent.match_all):
-                missing = [kw for kw in intent.match_all if kw.lower() not in lowered]
-                debug_lines.append(
-                    f"  跳过 {intent.intent_id}: match_all missing={missing}"
-                )
                 continue
-            # ----- compute hits -----
             hits = sum(1 for keyword in intent.match_any if keyword.lower() in lowered)
-            hit_keywords = [kw for kw in intent.match_any if kw.lower() in lowered]
             example_hits = sum(1 for example in intent.examples if example and example in question)
-            hit_examples = [ex for ex in intent.examples if ex and ex in question]
-            # ----- exclusion by zero hits -----
             if intent.match_any and hits == 0 and example_hits == 0:
-                debug_lines.append(
-                    f"  跳过 {intent.intent_id}: zero hits "
-                    f"(match_any={intent.match_any}, examples={intent.examples})"
-                )
                 continue
-            # ----- score computation -----
             score = intent.priority + hits + (example_hits * 2)
-            confidence = min(0.99, max(0.5, score / 100))
-            distance = round(1.0 - confidence, 4)
-            debug_lines.append(
-                f"  命中 {intent.intent_id}: priority={intent.priority} "
-                f"+ hits={hits}{hit_keywords} + example_hits×2={example_hits * 2}{hit_examples} "
-                f"= score={score} confidence={confidence:.2f} distance={distance}"
-            )
             scored.append((score, -order, intent))
         if not scored:
-            _logger.info(
-                "[LEXICAL] ← %r → 没有任何匹配成功 (%d intents scanned)",
-                question, len(self.intents),
-            )
             return None
-        # ----- sort and pick winner -----
         score, _, intent = max(scored, key=lambda item: (item[0], item[1]))
         confidence = min(0.99, max(0.5, score / 100))
-        distance = round(1.0 - confidence, 4)
-        # Log the winner summary every time; log per-intent details only on first call
-        _logger.info(
-            "[提问]：%r → %s 得到分数=%d confidence=%.2f "
-            "distance=%.4f (from %d candidates)",
-            question, intent.intent_id, score, confidence, distance, len(scored),
-        )
-        if self._best_intent_last_question != question:
-            for line in debug_lines:
-                _logger.info(line)
-        self._best_intent_last_question = question
         return intent, round(confidence, 2)
 
     def _extract_slots(self, question: str, intent: BusinessIntent) -> dict[str, Any]:
-        slots: dict[str, Any] = dict(intent.slot_defaults)
-        requested_slots = set(intent.required_slots) | set(intent.optional_slots) | set(slots)
-        if "age" in requested_slots:
-            slots.setdefault("age", _extract_age(question) or 60)
-        if "age_cutoff_ms" in requested_slots or "age" in requested_slots:
-            age = int(slots.get("age") or 60)
-            slots["age_cutoff_ms"] = epoch_ms_for_age_at_least(age)
-        if "month_start_ms" in requested_slots:
-            slots["month_start_ms"] = month_start_epoch_ms()
-        if "month_end_ms" in requested_slots:
-            slots["month_end_ms"] = month_end_epoch_ms()
-        if "week_start_ms" in requested_slots:
-            slots["week_start_ms"] = week_start_epoch_ms()
-        if "week_end_ms" in requested_slots:
-            slots["week_end_ms"] = week_end_epoch_ms()
-        if "current_year" in requested_slots:
-            slots["current_year"] = dt.date.today().year
-        if "current_month" in requested_slots:
-            slots["current_month"] = dt.date.today().month
-        if "apply_month_scope" in requested_slots and _question_has_month_scope(question):
-            slots["apply_month_scope"] = True
-        if "apply_week_scope" in requested_slots and _question_has_week_scope(question):
-            slots["apply_week_scope"] = True
-        if "year_start_ms" in requested_slots:
-            slots["year_start_ms"] = _year_start_epoch_ms()
-        if "sexual" in requested_slots: # 性别
-            sexual = _extract_sexual(question, slots.get("sexual"))
-            if sexual:
-                slots["sexual"] = sexual
-        if "marital_status" in requested_slots: # 婚姻状态
-            marital_status = _extract_marital_status(question, slots.get("marital_status"))
-            if marital_status:
-                slots["marital_status"] = marital_status
-        if "person_name" in requested_slots: # 姓名
-            name = _extract_person_name(question, intent.intent_id)
-            if name:
-                slots["person_name"] = name
-                
-                
-        if "merchant_name" in requested_slots or "merchant_name_like" in requested_slots: # 负责人
-            merchant_name = _extract_merchant_name(question)
-            if merchant_name:
-                slots["merchant_name"] = merchant_name
-                slots["merchant_name_like"] = _like_value(merchant_name)
-                
-        if "result_limit" in requested_slots: # 前多少名，top几
-            slots["result_limit"] = _extract_result_limit(question, int(slots.get("result_limit") or 10))
+        return extract_slots(
+            question,
+            intent_id=intent.intent_id,
+            required_slots=intent.required_slots,
+            optional_slots=intent.optional_slots,
+            slot_defaults=intent.slot_defaults,
+        )
 
+    def _normalized_question(self, question: str) -> str:
+        return re.sub(r"\s+", "", question.strip())
 
+    def _question_matches_intent_example(self, question: str, intent: BusinessIntent) -> bool:
+        normalized_question = self._normalized_question(question)
+        for example in intent.examples:
+            if not example:
+                continue
+            normalized_example = self._normalized_question(example)
+            if normalized_question == normalized_example or example in question:
+                return True
+        return False
 
+    def _candidate_gap(self, candidates: list[IntentVectorCandidate]) -> float:
+        if len(candidates) < 2:
+            return 1.0
+        return candidates[1].distance - candidates[0].distance
 
-        # -- Department-related slot extraction (LLM-fallback heuristic) --
-        if "parent_dept_name" in requested_slots:
-            # match = re.search(r"([\u4e00-\u9fa5]+)(?:下级|下属|子部门)", question)
-            # 转义特殊字符并按长度排序
-            _dept_name_pattern = "|".join(sorted(
-                (re.escape(name) for name in intent.match_any), 
-                key=len, 
-                reverse=True
-            ))
-            # 使用 f-string 插入变量
-            match = re.search(rf"([\u4e00-\u9fa5]+?)(?={_dept_name_pattern})", question)
-            if match:
-                slots["parent_dept_name"] = match.group(1).strip()
-        if "dept_name" in requested_slots:
-            # match = re.search(r"([\u4e00-\u9fa5]+?)(?=有多少人|多少人|总人数|的人数|人数)", question)
-            # 转义特殊字符并按长度排序
-            _dept_name_pattern = "|".join(sorted(
-                (re.escape(name) for name in intent.match_any), 
-                key=len, 
-                reverse=True
-            ))
-            # 使用 f-string 插入变量
-            match = re.search(rf"([\u4e00-\u9fa5]+?)(?={_dept_name_pattern})", question)
-            if match:
-                candidate = match.group(1).strip()
-                # 过滤通用词汇，避免 "用户人数" → dept_name="用户" 的误提取
-                _generic_dept_terms = {"用户", "员工", "人员", "全部", "所有", "整个", "全", "大家"}
-                if candidate not in _generic_dept_terms:
-                    slots["dept_name"] = candidate
-        if "dept_lvl" in requested_slots:
-            _dept_level_map = {"二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-            match = re.search(r"各?([二三四五六七八九\d]+)级部门", question)
-            if match:
-                raw = match.group(1)
-                slots["dept_lvl"] = _dept_level_map.get(raw, int(raw) if raw.isdigit() else None)
-            elif isinstance(slots.get("dept_lvl", None), (int, float)):
-                slots["dept_lvl"] = slots.get("dept_lvl")
-        if intent.intent_id == "field_explanation":
-            match = re.search(
-                r"\b([a-z][a-z0-9_]*)\s*\.\s*([a-z][a-z0-9_]*)\b",
-                question,
-                re.IGNORECASE,
-            )
-            if match:
-                slots.setdefault("table_name", match.group(1).lower())
-                slots.setdefault("column_name", match.group(2).lower())
-                slots.setdefault("field_name", f"{match.group(1).lower()}.{match.group(2).lower()}")
-        if "phone" in requested_slots:
-            match = PHONE_RE.search(question)
-            if match:
-                slots["phone"] = match.group(1)
-        if "card_no" in requested_slots:
-            match = CARD_RE.search(question)
-            if match:
-                slots["card_no"] = match.group(1)
-        return slots
+    def _passes_lexical_only_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        confidence: float,
+    ) -> bool:
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if confidence >= self.routing.min_executable_confidence:
+            return True
+        return False
+
+    def _is_ambiguous_candidate_set(self, candidates: list[IntentVectorCandidate]) -> bool:
+        if len(candidates) < 2:
+            return False
+        first = candidates[0]
+        second = candidates[1]
+        if first.distance > self.routing.executable_max_distance:
+            return False
+        if second.distance > self.routing.executable_max_distance:
+            return False
+        return self._candidate_gap(candidates) < self.routing.min_ambiguity_gap
+
+    def _passes_executable_routing_gate(
+        self,
+        question: str,
+        intent: BusinessIntent,
+        selected_candidate: IntentVectorCandidate,
+        candidates: list[IntentVectorCandidate],
+    ) -> bool:
+        if intent.status != "executable":
+            return True
+        if self._question_matches_intent_example(question, intent):
+            return True
+        if selected_candidate.distance <= 0.01:
+            return True
+        lexical = self._lexical_candidate(question)
+        if (
+            lexical is not None
+            and lexical.intent_id == intent.intent_id
+            and lexical.distance <= self.routing.strong_lexical_distance
+        ):
+            return True
+        if selected_candidate.matched_query == "keyword_match" and lexical is not None:
+            if (
+                lexical.intent_id == intent.intent_id
+                and lexical.distance <= self.routing.strong_lexical_distance + 0.02
+            ):
+                return True
+        distance = selected_candidate.distance
+        if distance > self.routing.executable_max_distance:
+            return False
+        if _confidence_from_distance(distance) < self.routing.min_executable_confidence:
+            return False
+        if self._is_ambiguous_candidate_set(candidates):
+            return False
+        return True
 
     def _try_fast_heuristic_plan(
         self,
@@ -1003,16 +819,6 @@ class BusinessSemanticIndex:
             "heuristic_fast_path",
             {},
         )
-        _log_plan_result(
-            question=question,
-            status=intent.status,
-            intent_id=intent.intent_id,
-            display_name=intent.display_name,
-            slot_source=slot_source,
-            confidence=confidence,
-            vector_distance=round(selected_candidate.distance, 4),
-            elapsed_ms=self._elapsed_ms(started),
-        )
         return self._build_plan(
             question,
             intent,
@@ -1039,27 +845,11 @@ class BusinessSemanticIndex:
                 continue
             normalized_example = re.sub(r"\s+", "", example.strip())
             if normalized_question == normalized_example or example in question:
-                _logger.info(
-                    "[SKIP-LLM] intent=%s exact example match: %r in %r → skip LLM",
-                    intent.intent_id, example, question,
-                )
                 return True
         if selected_candidate.distance <= self.routing.fast_path_max_distance:
             if len(candidates) == 1:
-                _logger.info(
-                    "[SKIP-LLM] intent=%s sole candidate distance=%.4f ≤ %.2f → skip LLM",
-                    intent.intent_id, selected_candidate.distance,
-                    _FAST_LLM_SKIP_VECTOR_DISTANCE,
-                )
                 return True
-            second_distance = candidates[1].distance
-            if second_distance - selected_candidate.distance >= 0.08:
-                _logger.info(
-                    "[SKIP-LLM] intent=%s distance=%.4f gap=%.4f (vs #2 %s distance=%.4f) ≥ 0.08 → skip LLM",
-                    intent.intent_id, selected_candidate.distance,
-                    round(second_distance - selected_candidate.distance, 4),
-                    candidates[1].intent_id, second_distance,
-                )
+            if self._candidate_gap(candidates) >= self.routing.min_candidate_gap:
                 return True
         lexical = self._lexical_candidate(question)
         if (
@@ -1067,15 +857,7 @@ class BusinessSemanticIndex:
             and lexical.intent_id == intent.intent_id
             and lexical.distance <= self.routing.strong_lexical_distance
         ):
-            _logger.info(
-                "[SKIP-LLM] intent=%s strong lexical distance=%.4f ≤ %.2f → skip LLM",
-                intent.intent_id, lexical.distance, _STRONG_LEXICAL_DISTANCE,
-            )
             return True
-        _logger.info(
-            "[SKIP-LLM] intent=%s distance=%.4f no skip condition met → will call LLM",
-            intent.intent_id, selected_candidate.distance,
-        )
         return False
 
     def _heuristic_plan_ready(self, intent: BusinessIntent, slots: dict[str, Any]) -> bool:
@@ -1099,17 +881,13 @@ class BusinessSemanticIndex:
     def _lexical_candidate(self, question: str) -> IntentVectorCandidate | None:
         matched = self._best_intent(question)
         if matched is None:
-            _logger.info("[LEXICAL] ← %r → no keyword match", question)
             return None
         intent, confidence = matched
-        candidate = IntentVectorCandidate(
+        return IntentVectorCandidate(
             intent_id=intent.intent_id,
             distance=round(max(0.0, 1.0 - confidence), 4),
             matched_query="keyword_match",
         )
-        _logger.info("[LEXICAL] ← %r → candidate %s distance=%.4f confidence=%.2f",
-                     question, intent.intent_id, candidate.distance, confidence)
-        return candidate
 
     def _apply_strong_lexical_override(
         self,
@@ -1122,36 +900,16 @@ class BusinessSemanticIndex:
         extracted_slots: dict[str, Any],
     ) -> tuple[BusinessIntent, IntentVectorCandidate, dict[str, Any], float, str]:
         lexical = self._lexical_candidate(question)
-        if lexical is None or lexical.distance > _STRONG_LEXICAL_DISTANCE:
-            _logger.info(
-                "[OVERRIDE] no lexical intent or distance > %.2f (lexical=%s, dist=%.4f) → keep %s",
-                _STRONG_LEXICAL_DISTANCE,
-                lexical.intent_id if lexical else None,
-                lexical.distance if lexical else None,
-                intent.intent_id,
-            )
+        if lexical is None or lexical.distance > self.routing.strong_lexical_distance:
             return intent, selected_candidate, slots, confidence, slot_source
 
         lexical_intent = self._intents_by_id.get(lexical.intent_id)
         if lexical_intent is None or lexical_intent.status not in {"executable", "metadata"}:
-            _logger.info(
-                "[OVERRIDE] lexical intent %s not available or not executable/metadata → keep %s",
-                lexical.intent_id, intent.intent_id,
-            )
             return intent, selected_candidate, slots, confidence, slot_source
 
         if intent.intent_id == lexical_intent.intent_id and intent.status in {"executable", "metadata"}:
-            _logger.info(
-                "[OVERRIDE] same intent %s (LLM=%s, keyword=%s) → no override",
-                intent.intent_id, intent.intent_id, lexical_intent.intent_id,
-            )
             return intent, selected_candidate, slots, confidence, slot_source
 
-        _logger.info(
-            "[OVERRIDE] STRONG OVERRIDE: LLM selected %s but keyword says %s (distance=%.4f ≤ %.2f) → overriding",
-            intent.intent_id, lexical_intent.intent_id,
-            lexical.distance, _STRONG_LEXICAL_DISTANCE,
-        )
         merged_slots = self._complete_slots(
             question,
             lexical_intent,
@@ -1185,214 +943,6 @@ class BusinessSemanticIndex:
 
     def _elapsed_ms(self, started: float) -> int:
         return int((time.monotonic() - started) * 1000)
-
-
-def _log_plan_result(
-    *,
-    question: str,
-    status: str,
-    intent_id: str | None = None,
-    display_name: str | None = None,
-    slot_source: str = "",
-    confidence: float = 0.0,
-    vector_distance: float | None = None,
-    elapsed_ms: int = 0,
-    reason: str | None = None,
-) -> None:
-    """统一的语义规划结果日志，每次提问输出一行。"""
-    llm_called = slot_source.startswith("llm") if slot_source else False
-    intent_str = f"{intent_id}({display_name})" if intent_id else "-"
-    dist_str = f"{vector_distance:.3f}" if vector_distance is not None else "-"
-    extra = f" reason={reason}" if reason else ""
-    print(
-        f"[PLAN] ← {question!r} → intent={intent_str} status={status} "
-        f"llm={llm_called} source={slot_source} conf={confidence:.2f} "
-        f"dist={dist_str} t={elapsed_ms}ms{extra}",
-        flush=True,
-    )
-
-
-def _question_has_month_scope(question: str) -> bool:
-    return any(marker in question for marker in ("本月", "这个月", "当月"))
-
-
-def _question_has_week_scope(question: str) -> bool:
-    return any(marker in question for marker in ("本周", "这周", "当周"))
-
-
-def _computed_values(slots: dict[str, Any]) -> dict[str, int]:
-    age = int(slots.get("age") or 60)
-    today = dt.date.today()
-    return {
-        "age_cutoff_ms": int(slots.get("age_cutoff_ms") or epoch_ms_for_age_at_least(age)),
-        "age_cutoff_18_ms": int(slots.get("age_cutoff_18_ms") or epoch_ms_for_age_at_least(18)),
-        "age_cutoff_35_ms": int(slots.get("age_cutoff_35_ms") or epoch_ms_for_age_at_least(35)),
-        "age_cutoff_60_ms": int(slots.get("age_cutoff_60_ms") or epoch_ms_for_age_at_least(60)),
-        "month_start_ms": int(slots.get("month_start_ms") or month_start_epoch_ms()),
-        "month_end_ms": int(slots.get("month_end_ms") or month_end_epoch_ms(today)),
-        "week_start_ms": int(slots.get("week_start_ms") or week_start_epoch_ms(today)),
-        "week_end_ms": int(slots.get("week_end_ms") or week_end_epoch_ms(today)),
-        "year_start_ms": int(slots.get("year_start_ms") or _year_start_epoch_ms(today)),
-        "last_year_start_ms": int(slots.get("last_year_start_ms") or _year_start_epoch_ms(_add_years(today, -1))),
-        "last_year_end_ms": int(slots.get("last_year_end_ms") or _year_start_epoch_ms(today)),
-        "half_year_start_ms": int(slots.get("half_year_start_ms") or _date_to_epoch_ms(today - dt.timedelta(days=183))),
-        "senior_next_year_birth_start_ms": int(
-            slots.get("senior_next_year_birth_start_ms")
-            or _date_to_epoch_ms(dt.date(today.year + 1 - 80, 1, 1))
-        ),
-        "senior_next_year_birth_end_ms": int(
-            slots.get("senior_next_year_birth_end_ms")
-            or _date_to_epoch_ms(dt.date(today.year + 2 - 80, 1, 1))
-        ),
-        "result_limit": int(slots.get("result_limit") or 10),
-    }
-
-
-def _year_start_epoch_ms(today: dt.date | None = None) -> int:
-    current = today or dt.date.today()
-    start = dt.date(current.year, 1, 1)
-    return _date_to_epoch_ms(start)
-
-
-def _date_to_epoch_ms(value: dt.date) -> int:
-    """Convert a date to epoch milliseconds.
-
-    Uses manual arithmetic instead of .timestamp() to support pre-1970
-    dates on Windows where the C runtime rejects negative timestamps.
-    """
-    _EPOCH = dt.datetime(1970, 1, 1)
-    return int((dt.datetime.combine(value, dt.time.min) - _EPOCH).total_seconds() * 1000)
-
-
-def _add_years(value: dt.date, years: int) -> dt.date:
-    return dt.date(value.year + years, value.month, value.day)
-
-
-def _extract_age(question: str) -> int | None:
-    match = re.search(r"(\d{2,3})\s*岁", question)
-    if not match:
-        return None
-    return int(match.group(1))
-
-
-def _extract_sexual(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return _normalize_sexual(default)
-    if any(keyword in question for keyword in ["女性", "女党员", "女居民", "女"]):
-        return "女"
-    if any(keyword in question for keyword in ["男性", "男党员", "男居民", "男"]):
-        return "男"
-    return None
-
-
-def _extract_marital_status(question: str, default: Any = None) -> str | None:
-    if isinstance(default, str) and default:
-        return _normalize_marital_status(default)
-    for value in ["未婚", "已婚", "离异", "离婚", "丧偶"]:
-        if value in question:
-            return "离异" if value == "离婚" else value
-    return None
-
-
-def _normalize_sexual(value: str) -> str | None:
-    lowered = value.strip().lower()
-    if lowered in {"female", "woman", "women", "f"}:
-        return "女"
-    if lowered in {"male", "man", "men", "m"}:
-        return "男"
-    if "女" in value:
-        return "女"
-    if "男" in value:
-        return "男"
-    return value or None
-
-
-def _normalize_marital_status(value: str) -> str | None:
-    lowered = value.strip().lower()
-    if lowered in {"unmarried", "single"}:
-        return "未婚"
-    if lowered == "married":
-        return "已婚"
-    if lowered == "divorced":
-        return "离异"
-    if lowered == "widowed":
-        return "丧偶"
-    if "未婚" in value:
-        return "未婚"
-    if "已婚" in value:
-        return "已婚"
-    if "离异" in value or "离婚" in value:
-        return "离异"
-    if "丧偶" in value:
-        return "丧偶"
-    return value or None
-
-
-def _extract_person_name(question: str, intent_id: str) -> str | None:
-    patterns = [
-        r"([\u4e00-\u9fa5]{2,4}?)(?=负责|职责|工作)",
-        r"离职的([\u4e00-\u9fa5]{2,4}?)(?=什么时候|以前|[，。？！?]|$)",
-        r"([\u4e00-\u9fa5]{2,4}?)(?:的)?(?=个人资料|住户资料|居民资料|信息|资料|档案|详情)",
-    ]
-    if intent_id == "employee_position_holder":
-        return None
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if match:
-            return match.group(1)
-    names = [
-        item
-        for item in CHINESE_NAME_RE.findall(question)
-    ]
-    return names[0] if names else None
-
-
-
-def _extract_merchant_name(question: str) -> str | None:
-    patterns = [
-        r"([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,20}?)(?=联系人|联系人是谁|负责人|负责人是谁)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, question)
-        if match:
-            value = _clean_slot_text(match.group(1))
-            return value
-    return None
-
-
-
-
-def _extract_result_limit(question: str, default: int = 10) -> int:
-    match = re.search(r"TOP\s*(\d+)", question, re.IGNORECASE)
-    if match:
-        return max(1, int(match.group(1)))
-    match = re.search(r"前\s*(\d+)", question)
-    if match:
-        return max(1, int(match.group(1)))
-    if "TOP3" in question.upper():
-        return 3
-    return default
-
-
-
-
-def _clean_slot_text(value: str) -> str:
-    cleaned = value.strip(" \t\r\n，。？！?的“”‘’\"'")
-    for prefix in ["请问", "帮我查", "查询", "查一下", "本社区", "社区"]:
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix) :]
-    return cleaned.strip(" \t\r\n，。？！?的“”‘’\"'")
-
-
-def _like_value(value: str) -> str:
-    return f"%{value}%"
-
-
-def _normalize_like_value(value: str) -> str:
-    cleaned = _clean_slot_text(value.strip().strip("%")).rstrip("下里内")
-    return _like_value(cleaned) if cleaned else value
-
-
 
 
 def _confidence_from_distance(distance: float) -> float:
