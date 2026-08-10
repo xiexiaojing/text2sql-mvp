@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from text2sql_runtime.business_semantics import BusinessSemanticIndex, resolve_business_semantics_path
 from text2sql_runtime.conversation import contextualize_question
+from text2sql_runtime.conversation_rewrite import build_follow_up_rewrite_context
 from text2sql_runtime.models import QueryInput
+from text2sql_runtime.schema import SchemaCatalog
 
 
 def test_contextualize_chart_type_follow_up_from_channel_amount_pie():
@@ -48,6 +51,22 @@ def test_contextualize_short_follow_up_with_previous_subject():
     assert log["rewriteReason"] == "dimension_slot_follow_up"
 
 
+def test_contextualize_dimension_follow_up_uses_schema_and_template_dimensions(project_root):
+    catalog = SchemaCatalog.from_whitelist(project_root / "configs" / "whitelist_tables.yaml")
+    business_semantics = BusinessSemanticIndex.from_config(resolve_business_semantics_path(project_root))
+    rewrite_context = build_follow_up_rewrite_context(catalog, business_semantics)
+
+    rewritten, log = contextualize_question(
+        "按供应商呢",
+        [{"role": "user", "content": "IT资产按状态统计"}],
+        rewrite_context,
+    )
+
+    assert rewritten == "IT资产按供应商统计"
+    assert log is not None
+    assert log["rewriteReason"] == "dimension_slot_follow_up"
+
+
 def test_contextualize_count_to_list_follow_up_generalized():
     rewritten, log = contextualize_question(
         "有哪些",
@@ -61,6 +80,85 @@ def test_contextualize_count_to_list_follow_up_generalized():
     assert rewritten == "商户有哪些"
     assert log is not None
     assert log["rewriteReason"] == "count_to_list_follow_up"
+
+
+def test_contextualize_value_substitution_follow_up():
+    rewritten, log = contextualize_question(
+        "那北京的呢",
+        [
+            {"role": "user", "content": "上海已分配的IT资产明细"},
+            {"role": "assistant", "content": "已返回上海已分配IT资产明细。"},
+            {"role": "user", "content": "那北京的呢"},
+        ],
+    )
+
+    assert rewritten == "北京已分配的IT资产明细"
+    assert log is not None
+    assert log["rewriteReason"] == "value_substitution_follow_up"
+
+
+def test_contextualize_value_substitution_follow_up_with_longer_replacement():
+    rewritten, log = contextualize_question(
+        "那乌鲁木齐的呢",
+        [
+            {"role": "user", "content": "上海已分配的IT资产明细"},
+            {"role": "assistant", "content": "已返回上海已分配IT资产明细。"},
+            {"role": "user", "content": "那乌鲁木齐的呢"},
+        ],
+    )
+
+    assert rewritten == "乌鲁木齐已分配的IT资产明细"
+    assert log is not None
+    assert log["rewriteReason"] == "value_substitution_follow_up"
+
+
+def test_contextualize_value_substitution_follow_up_uses_prior_effective_question():
+    rewritten, log = contextualize_question(
+        "那乌鲁木齐的呢",
+        [
+            {"role": "user", "content": "上海已分配的IT资产明细"},
+            {"role": "assistant", "content": "已返回上海已分配IT资产明细。"},
+            {"role": "user", "content": "那北京的呢"},
+            {"role": "assistant", "content": "已返回北京已分配IT资产明细。"},
+            {"role": "user", "content": "那乌鲁木齐的呢"},
+        ],
+    )
+
+    assert rewritten == "乌鲁木齐已分配的IT资产明细"
+    assert log is not None
+    assert log["rewriteReason"] == "value_substitution_follow_up"
+
+
+def test_contextualize_value_substitution_follow_up_preserves_other_qualifiers():
+    rewritten, log = contextualize_question(
+        "已分配的呢",
+        [
+            {"role": "user", "content": "北京库存的IT资产明细"},
+            {"role": "assistant", "content": "已返回北京库存IT资产明细。"},
+            {"role": "user", "content": "已分配的呢"},
+        ],
+    )
+
+    assert rewritten == "北京已分配的IT资产明细"
+    assert log is not None
+    assert log["rewriteReason"] == "value_substitution_follow_up"
+
+
+def test_contextualize_value_substitution_follow_up_switches_back_to_location_after_status():
+    rewritten, log = contextualize_question(
+        "那上海的呢",
+        [
+            {"role": "user", "content": "北京库存的IT资产明细"},
+            {"role": "assistant", "content": "已返回北京库存IT资产明细。"},
+            {"role": "user", "content": "已分配的呢"},
+            {"role": "assistant", "content": "已返回北京已分配IT资产明细。"},
+            {"role": "user", "content": "那上海的呢"},
+        ],
+    )
+
+    assert rewritten == "上海已分配的IT资产明细"
+    assert log is not None
+    assert log["rewriteReason"] == "value_substitution_follow_up"
 
 
 def test_query_uses_history_for_follow_up_grouping(service):

@@ -50,8 +50,6 @@ intents:
       - "用户总数"
       - "集团人数"
       - "集团有多少人"
-      - "人力资源中心人数"
-      - "销售部有多少人"
       - "有多少用户"
       - "有多少员工"
     semantic:
@@ -93,8 +91,6 @@ intents:
       - "性别比例"
       - "用户男女比例"
       - "集团男女比例"
-      - "人力资源中心男女比例"
-      - "销售部性别分布"
       - "男女各有多少"
     semantic:
       queries:
@@ -142,14 +138,11 @@ intents:
       - "人员列表"
       - "用户名单"
       - "集团人员列表"
-      - "销售部人员列表"
       - "某部门人员列表"
-      - "人力资源中心花名册"
     semantic:
       queries:
         - "列出所有用户"
         - "某部门有哪些人"
-        - "查询销售部员工名单"
         - "部门人员通讯录"
     ontology_refs: [User]
     physical_tables: [sys_user]
@@ -160,7 +153,7 @@ intents:
 
 
   # ==================== 指定部门下级各部门人数 ====================
-  # 区别于 user_by_dept（全量分组）：本意图需要提取 parent_dept_name，只查该部门的下级
+  # 区别于 user_by_dept（全量分组）：本意图需要提取 parent_name，只查该部门的下级
   - id: user_by_parent_dept
     display_name: 指定部门下级所有部门人数
     status: executable
@@ -176,21 +169,19 @@ intents:
         - "各部门人数"
         - "各中心人数"
         - "有哪些部门"
+        - "有哪些分公司"
     examples:
       - "某部门下级各部门人数"
-      - "技术中心下属部门人数"
-      - "财务部下级部门人数"
-      - "人力资源中心子部门人数"
     semantic:
       queries:
         - "某部门下级人数分布"
         - "指定部门子部门人员统计"
     ontology_refs: [User, Dept]
     physical_tables: [sys_user, sys_dept]
-    required_slots: [parent_dept_name]
-    slot_defaults:
-      parent_dept_name: 易鑫集团
+    required_slots: [parent_name]
+    slot_defaults: {}
     output_type: grouped_count
+    remark: "parent_name为要查询下属的父部门，当插槽提取不到值时，设为易鑫集团"
     template: user_by_parent_dept
 
 
@@ -258,7 +249,7 @@ sql_templates:
   user_by_parent_dept:
     plan: "查询指定部门所有下级各部门人数，通过 sys_dept 自关联 d.parent_id = parent.dept_id 解析父子关系。"
     params:
-      parent_dept_name: parent_dept_name
+      parent_name: parent_name
     sql: >
       SELECT t.dept_name, COUNT(u.user_id) AS total
       FROM sys_dept t
@@ -267,7 +258,7 @@ sql_templates:
       WHERE t.parent_id = (
         select dept_id 
         from sys_dept
-        where dept_long_name like concat('%', %(parent_dept_name)s, '%')
+        where dept_long_name like concat('%', %(parent_name)s, '%')
         and status = 0
         order by dept_lvl 
         limit 1

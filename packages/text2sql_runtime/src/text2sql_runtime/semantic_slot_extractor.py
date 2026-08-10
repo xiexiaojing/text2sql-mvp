@@ -42,10 +42,11 @@ class LlmSlotExtractor:
         candidate_map = {_string(candidate.get("id")): candidate for candidate in candidates}
         if not candidate_map:
             return None
+        candidate = candidates[0]
         system_prompt = _system_prompt()
         user_prompt = _user_prompt(question, candidates, history)
-        _logger.info("[LLM-SLOT] question=%r, candidates=%s", question, json.dumps(
-            [{k: v for k, v in c.items() if k in ("id", "allowed_slots", "required_slots")} for c in candidates],
+        _logger.info("[LLM-SLOT] question=%r, candidate=%s", question, json.dumps(
+            [{k: v for k, v in candidate.items() if k in ("id", "allowed_slots", "required_slots")}],
             ensure_ascii=False))
         print(f"\n[LLM-SLOT] ======== LLM Slot Extraction ========", flush=True)
         print(f"[LLM-SLOT] question: {question}", flush=True)
@@ -55,7 +56,7 @@ class LlmSlotExtractor:
             if self.settings.transport == "anthropic":
                 content = self._generate_with_anthropic(system_prompt, user_prompt)
             else:
-                content = self._generate_with_openai(system_prompt, user_prompt)
+                content = self._generate_with_openai(system_prompt, user_prompt, _compact_history(history or []))
             _logger.info("[LLM-SLOT] raw_response=%s", content)
             # print(f"[LLM-SLOT] RAW LLM RESPONSE:\n{content}\n", flush=True)
             payload = _parse_json(content)
@@ -73,12 +74,12 @@ class LlmSlotExtractor:
             print(f"[LLM-SLOT] INVALID decision={decision!r}", flush=True)
             return None
         intent_id = _string(payload.get("intent_id")) or None
-        if decision == "select" and (not intent_id or intent_id not in candidate_map):
-            _logger.warning("[LLM-SLOT] intent_id=%r not in candidate_map keys=%s", intent_id, list(candidate_map))
-            print(f"[LLM-SLOT] intent_id={intent_id!r} not in {list(candidate_map)}", flush=True)
-            return None
+        # if decision == "select" and (not intent_id or intent_id not in candidate_map):
+        #     _logger.warning("[LLM-SLOT] intent_id=%r not in candidate_map keys=%s", intent_id, list(candidate_map))
+        #     print(f"[LLM-SLOT] intent_id={intent_id!r} not in {list(candidate_map)}", flush=True)
+        #     return None
         slots = payload.get("slots")
-        allowed_slots = _allowed_slots(candidate_map.get(intent_id, {})) if intent_id else set()
+        allowed_slots = _allowed_slots(candidate)
         filtered = _filtered_slots(slots, allowed_slots)
         # _logger.info("[LLM-SLOT] allowed_slots=%s, raw_slots=%s, filtered_slots=%s", allowed_slots, slots, filtered)
         print(f"[LLM-SLOT] allowed_slots={allowed_slots}", flush=True)
@@ -87,8 +88,8 @@ class LlmSlotExtractor:
         print(f"[LLM-SLOT] ======== End LLM Slot Extraction ========\n", flush=True)
         return SlotExtractionResult(
             decision=decision,
-            intent_id=intent_id,
-            confidence=_confidence(payload.get("confidence")),
+            intent_id=candidate.get("id"),
+            confidence=1,
             slots=filtered,
             reason=_string(payload.get("reason")) or None,
             source="llm",
@@ -96,16 +97,18 @@ class LlmSlotExtractor:
             raw_response=content,
         )
 
-    def _generate_with_openai(self, system_prompt: str, user_prompt: str) -> str:
+    def _generate_with_openai(self, system_prompt: str, user_prompt: str, history: list[dict[str, str]]) -> str:
         headers = {"Authorization": f"Bearer {self.settings.api_key}", "Content-Type": "application/json"}
+        messages = [{"role": "system", "content": system_prompt}]
+        # if history:
+        #     messages += history
+        messages.append({"role": "user", "content": user_prompt})
         payload = {
             "model": self.settings.model,
             "temperature": 0,
-            "max_tokens": min(self.settings.max_tokens, 700),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            # "max_tokens": min(self.settings.max_tokens, 700),
+            "max_tokens": self.settings.max_tokens,
+            "messages": messages,
         }
         response = httpx.post(
             self.settings.base_url,
@@ -149,12 +152,14 @@ class LlmSlotExtractor:
 
 def _system_prompt() -> str:
     return (
-        "你是业务 Text-to-SQL 的语义规划器。只返回 JSON，不要解释。"
-        "你的任务是在 candidate_intents 中选择一个最匹配用户问题的 intent，并从用户问题中抽取槽位。"
-        "禁止选择候选之外的 intent，禁止编写 SQL，禁止猜测问题中没有提供的业务事实。"
-        "如果候选都不能覆盖问题，返回 decision=fallback。"
-        "JSON 格式：{\"decision\":\"select|fallback\",\"intent_id\":\"...\","
-        "\"confidence\":0.0,\"slots\":{},\"reason\":\"...\"}。"
+        "我是员工88943，当提问涉及到我的相关提问时，赋值我的信息即可。"
+        "你是一个 Text-to-SQL 的语义规划器。只返回 JSON，不要解释。"
+        # "你的任务是根据 candidate_intents 提供的 intent 抽取槽位。"
+        # "禁止选择候选之外的 intent，禁止编写 SQL，禁止猜测问题中没有提供的业务事实。"
+        # "如果候选都不能覆盖问题，则 decision=fallback。"
+        # "candidate_intents 中的 remark 字段是**业务背景补充说明**；"
+        "最终返回JSON 格式：{\"decision\":\"select|fallback\",\"slots\":{},\"reason\":\"...\"}。"
+        # " /no_think"
     )
 
 
@@ -163,16 +168,22 @@ def _user_prompt(
     candidates: Sequence[Mapping[str, Any]],
     history: list[dict[str, object]] | None,
 ) -> str:
+    user_prompt = "已知本次可提取插槽参数为："
+    candidate = candidates[0]
+    if candidate is not None:
+        user_prompt += "、".join(_allowed_slots(candidate) or [])
+        user_prompt += "，其中" + "；".join(str(item) for item in candidate.get("remark") or [])
+    user_prompt += f"，请从问题'{question}'中提取存在的插槽参数值。"
+    return user_prompt
+
     payload = {
-        "current_user": question,
-        "history": _compact_history(history or []),
+        "question": question,
+        # "history": _compact_history(history or []),
         "candidate_intents": [_candidate_projection(candidate) for candidate in candidates],
-        "slot_rules": [
-            "只填 candidate.allowed_slots 中出现的槽位。",
-            "person_name 使用中文姓名原文。",
-            "role_like/tag_like/address_like 需要包含 % 模糊匹配符。",
-            "未出现的 required slot 不要编造，留空即可。",
-        ],
+        # "slot_rules": [
+        #     "只填 candidate.allowed_slots 中出现的槽位。",
+        #     "未出现的 required slot 不要编造，留空即可。",
+        # ],
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -180,17 +191,18 @@ def _user_prompt(
 def _candidate_projection(candidate: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": _string(candidate.get("id")),
-        "display_name": _string(candidate.get("display_name")),
-        "status": _string(candidate.get("status")),
-        "output_type": _string(candidate.get("output_type")),
+        # "display_name": _string(candidate.get("display_name")),
+        # "status": _string(candidate.get("status")),
+        # "output_type": _string(candidate.get("output_type")),
         "required_slots": list(candidate.get("required_slots") or []),
         "optional_slots": list(candidate.get("optional_slots") or []),
         "slot_defaults": dict(candidate.get("slot_defaults") or {}),
         "allowed_slots": sorted(_allowed_slots(candidate)),
-        "examples": list(candidate.get("examples") or [])[:4],
-        "matched_query": _string(candidate.get("matched_query")),
-        "distance": candidate.get("distance"),
-        "reason": _string(candidate.get("reason")),
+        # "examples": list(candidate.get("examples") or [])[:4],
+        # "matched_query": _string(candidate.get("matched_query")),
+        # "distance": candidate.get("distance"),
+        # "reason": _string(candidate.get("reason")),
+        "remark": "；".join(str(item) for item in candidate.get("remark") or []),
     }
     return {key: value for key, value in result.items() if value not in ("", [], {}, None)}
 

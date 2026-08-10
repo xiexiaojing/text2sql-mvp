@@ -40,6 +40,7 @@ class BusinessIntent:
     output_type: str | None = None
     template_id: str | None = None
     reason: str | None = None
+    remark: tuple[str, ...] = ()
     needs: tuple[str, ...] = ()
     slot_defaults: dict[str, Any] = field(default_factory=dict)
 
@@ -234,6 +235,7 @@ class BusinessSemanticIndex:
                 output_type=item.get("output_type"),
                 template_id=item.get("template"),
                 reason=item.get("reason"),
+                remark=_as_str_tuple(item.get("remark")),
                 needs=tuple(str(value) for value in item.get("needs", [])),
                 slot_defaults=dict(item.get("slot_defaults", {})),
             )
@@ -266,20 +268,39 @@ class BusinessSemanticIndex:
 
     def plan(self, question: str, history: list[dict[str, object]] | None = None) -> SemanticPlan:
         started = time.monotonic()
-        candidates = self._candidate_intents(question)
+        candidates = self._candidate_intents(question) # 向量命中的意图集合
 
-        # vector / embeddings未启用，则走自定义意图识别逻辑
+        # vector / embeddings未启用，则走自定义模板逻辑
         if not candidates and not self.vector_index.enabled:
-            matched = self._best_intent(question) # 意图识别结果
-            if matched is not None:
+            matched = self._best_intent(question) # match命中结果
+            if matched is not None: # 命中match
                 intent, confidence = matched
-                if not self._passes_lexical_only_gate(question, intent, confidence):
+                if not self._passes_lexical_only_gate(question, intent, confidence): # 是否可信度高，不高则返回未配置
                     return SemanticPlan(
                         status="unsupported",
                         reason=UNCONFIGURED_SEMANTIC_REASON,
                         elapsed_ms=self._elapsed_ms(started),
                         slot_source="legacy_keywords_rejected",
                     )
+                # 已配置 LLM 时，用 LLM 抽取槽位（部门名 / 多插槽等无法靠启发式穷举的场景）
+                if self._llm_configured and self._llm_slot_policy != "never":
+                    llm_slots, llm_source, llm_elapsed = self._extract_slots_via_llm(
+                        question, [intent], history, confidence
+                    )
+                    if llm_slots is not None:
+                        return self._build_plan(
+                            question,
+                            intent,
+                            llm_slots,
+                            confidence,
+                            started,
+                            candidate_intents=[],
+                            matched_query=None,
+                            vector_distance=None,
+                            slot_source=llm_source,
+                            slot_elapsed_ms=llm_elapsed,
+                        )
+                # 兜底：纯启发式槽位
                 slots = self._complete_slots(
                     question,
                     intent,
@@ -449,6 +470,7 @@ class BusinessSemanticIndex:
         slot_source: str,
         slot_elapsed_ms: int,
     ) -> SemanticPlan:
+        # TODO: 这里需要根据 intent 的状态来判断是否需要补充缺失的 slot
         missing_slots = [slot for slot in intent.required_slots if _empty(slots.get(slot))]
         status = intent.status
         reason = intent.reason
@@ -496,15 +518,16 @@ class BusinessSemanticIndex:
             return []
         if not self._refresh_vector_index():
             return []
+        top_k = self.vector_index.config.top_k
         candidates = [
             candidate
             for candidate in self.vector_index.search(
                 question,
-                top_k=max(6, self.vector_index.config.top_k),
+                top_k=top_k,
             )
             if candidate.intent_id in self._intents_by_id
         ]
-        lexical = self._lexical_candidate(question)
+        lexical = self._lexical_candidate(question) # 获取match命中的意图
         if lexical:
             candidates = [
                 lexical
@@ -514,34 +537,43 @@ class BusinessSemanticIndex:
             ]
             if all(candidate.intent_id != lexical.intent_id for candidate in candidates):
                 candidates.append(lexical)
+        # 严格按配置的 top_k 截断，保证 TEXT2SQL_INTENT_VECTOR_TOP_K 真正生效
+        # （search 已对向量候选做 top_k 截断，此处再对“向量+词法合并”后的结果兜底截断）
         return sorted(
             candidates,
             key=lambda candidate: (
                 candidate.distance,
                 -self._intents_by_id[candidate.intent_id].priority,
             ),
-        )
+        )[:top_k]
+
+    def _project_intent(
+        self, intent: BusinessIntent, distance: float, matched_query: str
+    ) -> dict[str, Any]:
+        return {
+            "intent": intent.intent_id,
+            "distance": round(distance, 4),
+            "matchedQuery": matched_query,
+            "id": intent.intent_id,
+            "display_name": intent.display_name,
+            "status": intent.status,
+            "output_type": intent.output_type,
+            "required_slots": list(intent.required_slots),
+            "optional_slots": list(intent.optional_slots),
+            "physical_tables": list(intent.physical_tables),
+            "template": intent.template_id,
+            "ontology_refs": list(intent.ontology_refs),
+            "reason": intent.reason,
+            "needs": list(intent.needs),
+            "examples": list(intent.examples),
+            "slot_defaults": intent.slot_defaults,
+            "remark": intent.remark,
+        }
 
     def _candidate_projection(self, candidate: IntentVectorCandidate) -> dict[str, Any]:
         intent = self._intents_by_id[candidate.intent_id]
         payload = candidate.to_dict()
-        payload.update(
-            {
-                "id": intent.intent_id,
-                "display_name": intent.display_name,
-                "status": intent.status,
-                "output_type": intent.output_type,
-                "required_slots": list(intent.required_slots),
-                "optional_slots": list(intent.optional_slots),
-                "physical_tables": list(intent.physical_tables),
-                "template": intent.template_id,
-                "ontology_refs": list(intent.ontology_refs),
-                "reason": intent.reason,
-                "needs": list(intent.needs),
-                "examples": list(intent.examples),
-                "slot_defaults": intent.slot_defaults,
-            }
-        )
+        payload.update(self._project_intent(intent, candidate.distance, candidate.matched_query))
         return payload
 
     def _candidate_for_intent(
@@ -564,6 +596,38 @@ class BusinessSemanticIndex:
             return None
         return self.slot_extractor.extract(question, candidate_intents, history)
 
+    def _extract_slots_via_llm(
+        self,
+        question: str,
+        intents: list[BusinessIntent],
+        history: list[dict[str, object]] | None,
+        confidence: float,
+    ) -> tuple[dict[str, Any] | None, str, int]:
+        """用 LLM 为给定意图抽取槽位。
+
+        返回 ``(slots, slot_source, elapsed_ms)``；LLM 不可用 / 抽取失败 / 判定 fallback 时返回
+        ``(None, source, elapsed_ms)``，调用方应回退到启发式槽位。
+        """
+        if not intents or self.slot_extractor is None:
+            return None, "llm_unavailable", 0
+        candidate_intents = [
+            self._project_intent(intent, 1.0 - confidence, "keyword_match") for intent in intents
+        ]
+        extraction = self._extract_slots_with_llm(question, candidate_intents, history)
+        if extraction is None:
+            return None, "llm_extraction_failed", 0
+        if extraction.decision == "fallback":
+            return None, "llm_fallback", extraction.elapsed_ms
+        # lexical 已确认意图（已通过闸），仅借用 LLM 抽取出的槽位
+        intent = self._intents_by_id.get(extraction.intent_id) or intents[0]
+        slots = self._complete_slots(
+            question,
+            intent,
+            extraction.slots,
+            use_heuristic=False,
+        )
+        return slots, f"llm_slot_{extraction.source}", extraction.elapsed_ms
+
     def _complete_slots(
         self,
         question: str,
@@ -576,11 +640,11 @@ class BusinessSemanticIndex:
         if use_heuristic:
             for key, value in self._extract_slots(question, intent).items():
                 if not _empty(value):
-                    slots[key] = value
+                    slots[key] = value # 设置系统内置的参数
         for key, value in extracted_slots.items():
             if not _empty(value):
                 slots[key] = value
-        self._derive_slots(intent, slots)
+        self._derive_slots(intent, slots) # 设置系统内置参数默认值？？
         if intent.template_id == "dynamic_entity_query":
             self.entity_query_compiler.complete_slots(question, slots)
         if not use_heuristic and any(_empty(slots.get(slot)) for slot in intent.required_slots):
@@ -673,30 +737,38 @@ class BusinessSemanticIndex:
 
     def _best_intent(self, question: str) -> tuple[BusinessIntent, float] | None:
         scored: list[tuple[int, int, BusinessIntent]] = []
+        single_hit: list[tuple[int, int, BusinessIntent]] = []
         lowered = question.lower()
         for order, intent in enumerate(self.intents):
             if any(keyword.lower() in lowered for keyword in intent.match_none):
-                continue
+                continue # 命中任意match_none
             if intent.match_all and not all(keyword.lower() in lowered for keyword in intent.match_all):
-                continue
+                continue # 没有全部命中match_all
             hits = sum(1 for keyword in intent.match_any if keyword.lower() in lowered)
             example_hits = sum(1 for example in intent.examples if example and example in question)
             if intent.match_any and hits == 0 and example_hits == 0:
-                continue
-            if intent.match_any and not intent.match_all:
-                if example_hits == 0 and hits < self.routing.min_lexical_keyword_hits:
+                continue # 存在match_any 且未命中任何一个
+            strict = True
+            if intent.match_any and not intent.match_all: # 有any且没有all
+                if example_hits == 0 and hits < self.routing.min_lexical_keyword_hits: # hit命中少于2
                     long_hits = sum(
                         1
                         for keyword in intent.match_any
                         if len(keyword) >= 5 and keyword.lower() in lowered
                     )
                     if long_hits == 0:
-                        continue
+                        strict = False # 未命中>=5字符的长关键词，单短关键词不足以走严格闸
             score = intent.priority + hits + (example_hits * 2)
-            scored.append((score, -order, intent))
-        if not scored:
+            if strict:
+                scored.append((score, -order, intent))
+            else:
+                single_hit.append((score, -order, intent))
+        # 严格闸无命中时，若只有一个意图命中了短关键词（无竞争），仍视为明确命中，
+        # 以支持 "部门名+人数" 这类无法用子串枚举的问法；多意图同时单命中则保持拒绝（防歧义）。
+        candidates = scored or (single_hit if len(single_hit) == 1 else [])
+        if not candidates:
             return None
-        score, _, intent = max(scored, key=lambda item: (item[0], item[1]))
+        score, _, intent = max(candidates, key=lambda item: (item[0], item[1]))
         confidence = min(0.99, max(0.5, score / 100))
         return intent, round(confidence, 2)
 
@@ -712,6 +784,7 @@ class BusinessSemanticIndex:
     def _normalized_question(self, question: str) -> str:
         return re.sub(r"\s+", "", question.strip())
 
+    # 是否命中实例
     def _question_matches_intent_example(self, question: str, intent: BusinessIntent) -> bool:
         normalized_question = self._normalized_question(question)
         for example in intent.examples:
@@ -733,9 +806,9 @@ class BusinessSemanticIndex:
         intent: BusinessIntent,
         confidence: float,
     ) -> bool:
-        if self._question_matches_intent_example(question, intent):
+        if self._question_matches_intent_example(question, intent): # 命中实例
             return True
-        if confidence >= self.routing.min_executable_confidence:
+        if confidence >= self.routing.min_executable_confidence: # 置信度大于0.58
             return True
         return False
 
@@ -785,6 +858,7 @@ class BusinessSemanticIndex:
             return False
         return True
 
+    # 快速启发式意图
     def _try_fast_heuristic_plan(
         self,
         question: str,
@@ -799,8 +873,13 @@ class BusinessSemanticIndex:
         if intent is None:
             return None
         if not self._should_skip_llm_for_intent(question, intent, selected_candidate, candidates):
-            return None
+            return None # false不应该跳过LLM, true 跳过，继续往下走
         slots = self._complete_slots(question, intent, {}, use_heuristic=True)
+        # 已配置 LLM 且存在启发式填不上的可选槽位（如部门名）时，不抢跑，交给 LLM 抽取
+        if self._llm_configured and self._llm_slot_policy != "never":
+            unfilled_optional = [slot for slot in intent.optional_slots if _empty(slots.get(slot))]
+            if unfilled_optional:
+                return None
         if not self._heuristic_plan_ready(intent, slots):
             return None
         confidence = _confidence_from_distance(selected_candidate.distance)
@@ -941,6 +1020,23 @@ class BusinessSemanticIndex:
 
 def _confidence_from_distance(distance: float) -> float:
     return round(max(0.0, min(0.99, 1.0 - distance)), 2)
+
+
+def _as_str_tuple(value: Any) -> tuple[str, ...]:
+    """将 YAML 中的 remark 兼容为字符串元组。
+
+    支持三种写法：``None`` → ``()``、单个字符串 → ``(str,)``、列表 → 逐项转字符串。
+    这样可同时兼容 ``remark: "..."`` 与 ``remark:\n  - "..."`` 两种配置形式。
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    text = str(value).strip()
+    return (text,) if text else ()
 
 
 def _empty(value: Any) -> bool:

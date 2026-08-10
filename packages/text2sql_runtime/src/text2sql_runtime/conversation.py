@@ -3,11 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from .conversation_context import compact, normalize_history
-from .conversation_rewrite import apply_follow_up_rewrites
+from .conversation_rewrite import FollowUpRewriteContext, apply_follow_up_rewrites
 
 
-def contextualize_question(question: str, history: list[dict[str, Any]] | None) -> tuple[str, dict[str, Any] | None]:
-    return apply_follow_up_rewrites(question, history)
+def contextualize_question(
+    question: str,
+    history: list[dict[str, Any]] | None,
+    rewrite_context: FollowUpRewriteContext | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    return apply_follow_up_rewrites(question, history, rewrite_context)
 
 
 def conversation_context_lines(history: list[dict[str, Any]] | None) -> list[str]:

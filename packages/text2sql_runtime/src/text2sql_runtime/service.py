@@ -11,6 +11,7 @@ from .business_semantics import BusinessSemanticIndex, SemanticPlan, resolve_bus
 from .config import IntentRoutingSettings, RuntimeSettings, load_settings
 from .context import SchemaContextBuilder
 from .conversation import contextualize_question
+from .conversation_rewrite import build_follow_up_rewrite_context
 from .executor import SqlExecutor, build_executor
 from .field_encryption import encrypt_sensitive_query_params
 from .field_explanation import explain_field, resolve_field
@@ -58,6 +59,10 @@ class Text2SqlService:
             llm_settings=settings.llm,
             routing_settings=IntentRoutingSettings.from_performance(settings.performance),
             field_encryption=settings.field_encryption,
+        )
+        self.follow_up_rewrite_context = build_follow_up_rewrite_context(
+            catalog,
+            self.business_semantics,
         )
         self.router = QueryRouter(
             catalog,
@@ -122,7 +127,11 @@ class Text2SqlService:
     ) -> EstimateResult:
         semantic_plan: SemanticPlan | None = None
         try:
-            effective_question, _ = contextualize_question(question, history)
+            effective_question, _ = contextualize_question(
+                question,
+                history,
+                self.follow_up_rewrite_context,
+            )
             semantic_plan = self.business_semantics.plan(effective_question, history)
             executable_statuses = _EXECUTABLE_STATUSES
             self.router.validate_question_policies(
@@ -184,6 +193,7 @@ class Text2SqlService:
             effective_question, conversation_log = contextualize_question(
                 query_input.question,
                 query_input.history,
+                self.follow_up_rewrite_context,
             )
             if conversation_log:
                 interaction_logs.append(conversation_log)

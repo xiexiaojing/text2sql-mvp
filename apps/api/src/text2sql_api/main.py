@@ -62,7 +62,7 @@ def health() -> dict[str, str]:
 def chat() -> str:
     default_domain = os.getenv("TEXT2SQL_DEFAULT_DOMAIN_ID", "demo-tenant-1")
     default_domain_json = json.dumps(default_domain, ensure_ascii=False)
-    return f"""<!doctype html>
+    return rf"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -78,7 +78,7 @@ def chat() -> str:
     }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; min-height: 100vh; }}
-    main {{ max-width: 1540px; margin: 0 auto; padding: 24px; }}
+    main {{ max-width: 1540px; margin: 0 auto; padding: 20px; }}
     header {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 18px; }}
     h1 {{ margin: 0; font-size: 24px; font-weight: 700; }}
     .status {{ color: #5d6678; font-size: 13px; }}
@@ -118,7 +118,7 @@ def chat() -> str:
     .meta {{ color: #667085; font-size: 12px; margin-top: 6px; }}
     .composer {{ border-top: 1px solid #dde2ea; padding: 14px; display: grid; grid-template-columns: 1fr 108px; gap: 10px; }}
     .composer textarea {{ min-height: 54px; max-height: 160px; }}
-    .table-wrap {{ max-height: 500px; overflow: auto; margin-top: 10px; border: 1px solid #d8dee9; border-radius: 6px; }}
+    .table-wrap {{ max-height: 300px; overflow: auto; margin-top: 10px; border: 1px solid #d8dee9; border-radius: 6px; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }}
     th, td {{ border: 1px solid #d8dee9; padding: 8px; text-align: left; vertical-align: top; }}
     th {{ background: #f7f9fc; font-weight: 650; position: sticky; top: 0; z-index: 1; }}
@@ -137,6 +137,23 @@ def chat() -> str:
     .logitem pre {{ max-height: 220px; background: #0f172a; }}
     .emptylogs {{ color: #667085; font-size: 13px; line-height: 1.5; }}
     .error {{ background: #fff1f1; color: #9f1d20; }}
+    .header-actions {{ display: flex; align-items: center; gap: 12px; }}
+    .ghost-btn {{ width: auto; background: #eef2f7; color: #1f3b63; border: 1px solid #cdd5e1; padding: 6px 12px; font-size: 13px; font-weight: 600; }}
+    .ghost-btn:hover {{ background: #e2e9f3; }}
+    .layout.sidebar-collapsed {{ grid-template-columns: 1fr; }}
+    .layout.sidebar-collapsed .sidebar {{ display: none; }}
+    .table-result {{ margin-top: 10px; border: 1px solid #d8dee9; border-radius: 6px; overflow: hidden; background: #fff; }}
+    .table-result-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: #f7f9fc; border-bottom: 1px solid #d8dee9; }}
+    .table-result-count {{ color: #5d6678; font-size: 12px; }}
+    .view-toggle {{ width: auto; padding: 4px 10px; font-size: 12px; font-weight: 600; background: #eef2f7; color: #1f3b63; border: 1px solid #cdd5e1; }}
+    .view-toggle:hover {{ background: #e2e9f3; }}
+    .desc-list {{ display: grid; gap: 10px; padding: 10px; max-height: 300px; overflow: auto; }}
+    .desc-card {{ border: 1px solid #e6ebf2; border-radius: 6px; padding: 10px 12px; background: #fbfcfe; }}
+    .desc-card-title {{ font-size: 12px; font-weight: 700; color: #485368; margin-bottom: 8px; }}
+    .desc-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 18px; }}
+    .desc-item {{ display: flex; gap: 6px; font-size: 13px; line-height: 1.45; }}
+    .desc-label {{ color: #667085; flex: 0 0 auto; font-weight: 600; }}
+    .desc-value {{ color: #172033; word-break: break-word; }}
     @media (max-width: 860px) {{
       main {{ padding: 14px; }}
       header {{ display: block; }}
@@ -145,6 +162,7 @@ def chat() -> str:
       .chatbox, .logpanel {{ min-height: 520px; }}
       .msg {{ max-width: 100%; }}
       .composer {{ grid-template-columns: 1fr; }}
+      .desc-grid {{ grid-template-columns: repeat(1, minmax(0, 1fr)); }}
     }}
   </style>
 </head>
@@ -155,9 +173,12 @@ def chat() -> str:
         <h1>Text2SQL MVP 查询</h1>
         <div class="status" id="health">正在检查服务状态...</div>
       </div>
-      <div class="status">只读查询 · 自动注入 domain_id · 危险 SQL 拒绝</div>
+      <div class="header-actions">
+        <button type="button" id="toggleSidebar" class="ghost-btn">展开侧栏</button>
+        <span class="status">只读查询 · 自动注入 domain_id · 危险 SQL 拒绝</span>
+      </div>
     </header>
-    <section class="layout">
+    <section class="layout sidebar-collapsed">
       <div class="sidebar">
         <aside class="panel">
           <div class="field">
@@ -165,7 +186,7 @@ def chat() -> str:
             <input id="domainId" value="{escape(default_domain)}" autocomplete="off" />
           </div>
           <label class="check">
-            <input id="allowSql" type="checkbox" checked />
+            <input id="allowSql" type="checkbox" />
             返回生成 SQL
           </label>
           <label class="check">
@@ -206,17 +227,36 @@ def chat() -> str:
     const conversationHistory = [];
     const chartInstances = new Map();
     const MAX_HISTORY = 5;
+    // 列数超过该阈值时，列表默认以 Descriptions（label:value）卡片展示，避免横向挤压
+    const DESCRIPTIONS_COLUMN_THRESHOLD = 4;
+    const tableCache = new Map();
+    let tableSeq = 0;
     const questionHistory = [];
     let historyIndex = -1;
     let draftValue = "";
 
+    // 输入框历史：相同提问只保留最后一次
     function rememberQuestion(text) {{
-      if (text && questionHistory[questionHistory.length - 1] !== text) {{
-        questionHistory.push(text);
-        if (questionHistory.length > MAX_HISTORY) questionHistory.shift();
-      }}
+      if (!text) return;
+      const existing = questionHistory.indexOf(text);
+      if (existing !== -1) questionHistory.splice(existing, 1);
+      questionHistory.push(text);
+      if (questionHistory.length > MAX_HISTORY) questionHistory.shift();
       historyIndex = -1;
       draftValue = question.value;
+    }}
+
+    // 对话历史：相同提问只保留最后一次，移除此前重复的用户提问及其对应的助手回答
+    function appendTurn(questionText, answerText) {{
+      const norm = questionText.trim();
+      for (let i = conversationHistory.length - 2; i >= 0; i -= 1) {{
+        if (conversationHistory[i].role === "user" && conversationHistory[i].content.trim() === norm) {{
+          conversationHistory.splice(i, 2);
+        }}
+      }}
+      conversationHistory.push({{role: "user", content: questionText}});
+      conversationHistory.push({{role: "assistant", content: answerText}});
+      if (conversationHistory.length > 12) conversationHistory.splice(0, conversationHistory.length - 12);
     }}
 
     function browseHistory(direction) {{
@@ -295,6 +335,41 @@ def chat() -> str:
       return `<div class="table-wrap"><table><thead><tr>${{head}}</tr></thead><tbody>${{rows}}</tbody></table></div>`;
     }}
 
+    // 将一行数据渲染为 Descriptions 卡片：label:value，行内 3 列网格
+    function renderDescriptions(table) {{
+      const headerLabels = Array.isArray(table.column_labels) && table.column_labels.length === table.columns.length
+        ? table.column_labels
+        : table.columns;
+      const labelMap = {{}};
+      table.columns.forEach((column, index) => {{ labelMap[column] = headerLabels[index]; }});
+      const cards = table.rows.map((row, idx) => {{
+        const items = table.columns.map((column) => {{
+          const label = labelMap[column];
+          const value = row[column];
+          return `<div class="desc-item"><span class="desc-label">${{escapeHtml(label)}}：</span><span class="desc-value">${{escapeHtml(value)}}</span></div>`;
+        }}).join("");
+        return `<div class="desc-card"><div class="desc-card-title">记录 ${{idx + 1}}</div><div class="desc-grid">${{items}}</div></div>`;
+      }}).join("");
+      return `<div class="desc-list">${{cards}}</div>`;
+    }}
+
+    // 根据列数自动选择默认视图（宽表用 Descriptions），并提供表格/描述切换
+    function renderTableResult(table) {{
+      if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows) || table.rows.length === 0) {{
+        return "";
+      }}
+      const id = `tbl-${{tableSeq++}}`;
+      tableCache.set(id, table);
+      const wide = table.columns.length > DESCRIPTIONS_COLUMN_THRESHOLD;
+      const view = wide ? "desc" : "table";
+      const body = view === "desc" ? renderDescriptions(table) : renderTable(table);
+      const toggleLabel = view === "desc" ? "切换为表格视图" : "切换为描述视图";
+      return `<div class="table-result" data-tid="${{id}}" data-view="${{view}}">`
+        + `<div class="table-result-head"><span class="table-result-count">${{table.rows.length}} 条数据</span>`
+        + `<button type="button" class="view-toggle">${{toggleLabel}}</button></div>`
+        + `<div class="table-result-body">${{body}}</div></div>`;
+    }}
+
     function extractEchartsOption(answer) {{
       const match = answer.match(/```echarts\s*([\s\S]*?)```/);
       if (!match) return null;
@@ -350,7 +425,7 @@ def chat() -> str:
       }}
       
       if (data.rejectionReason) parts.push(`<div>${{escapeHtml(data.rejectionReason)}}</div>`);
-      parts.push(renderTable(data.table));
+      parts.push(renderTableResult(data.table));
       
       // Render chart if available
       if (echartsOption) {{
@@ -470,12 +545,7 @@ def chat() -> str:
         renderInteractionLogs(data, text);
         if (stickToBottom) scrollToBottom(messages);
         if (!response.ok) pending.classList.add("error");
-        conversationHistory.push({{role: "user", content: text}});
-        conversationHistory.push({{
-          role: "assistant",
-          content: data.answer || data.rejectionReason || data.status || "无结果"
-        }});
-        if (conversationHistory.length > 12) conversationHistory.splice(0, conversationHistory.length - 12);
+        appendTurn(text, data.answer || data.rejectionReason || data.status || "无结果");
       }} catch (error) {{
         pending.textContent = `请求失败：${{error}}`;
         pending.classList.add("error");
@@ -487,6 +557,22 @@ def chat() -> str:
 
 
     send.addEventListener("click", submitQuestion);
+
+    // 表格结果视图切换（表格 <-> Descriptions 描述），事件委托到消息容器
+    messages.addEventListener("click", (event) => {{
+      const btn = event.target.closest(".view-toggle");
+      if (!btn) return;
+      const result = btn.closest(".table-result");
+      const id = result.getAttribute("data-tid");
+      const table = tableCache.get(id);
+      if (!table) return;
+      const current = result.getAttribute("data-view");
+      const next = current === "desc" ? "table" : "desc";
+      const body = next === "desc" ? renderDescriptions(table) : renderTable(table);
+      result.querySelector(".table-result-body").innerHTML = body;
+      result.setAttribute("data-view", next);
+      btn.textContent = next === "desc" ? "切换为表格视图" : "切换为描述视图";
+    }});
     question.addEventListener("keydown", (event) => {{
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {{
         submitQuestion();
@@ -502,6 +588,12 @@ def chat() -> str:
         browseHistory(1);
         return;
       }}
+    }});
+    const toggleSidebar = document.getElementById("toggleSidebar");
+    const layout = document.querySelector(".layout");
+    toggleSidebar.addEventListener("click", () => {{
+      const collapsed = layout.classList.toggle("sidebar-collapsed");
+      toggleSidebar.textContent = collapsed ? "展开侧栏" : "收起侧栏";
     }});
     loadHealth();
   </script>

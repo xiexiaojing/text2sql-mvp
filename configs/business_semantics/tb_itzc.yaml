@@ -48,15 +48,23 @@ intents:
     slot_defaults: {}
     output_type: scalar_count
     template: asset_total_count
+    remark:
+      - "zczt是资产状态"
+      - "pp是品牌"
+      - "cfdd是存放地点"
+      - "cwsszt是财务所属主体"
+      - "zcly是资产来源"
+      - "gys是供应商"
+      - "dept_id是部门"
+      - "user_id是使用人"
 
-
-  # ==================== IT资产按状态分布 ====================
-  - id: asset_by_status
-    display_name: IT资产按状态分布
+  # ==================== IT资产按分组条件分布 ====================
+  - id: asset_groupby_count
+    display_name: IT资产按分组条件分布
     status: executable
     priority: 90
     match:
-      any: ["分布", "统计", "各", "占比", "多少", "排行", "分别"]
+      any: ["IT资产", "分布", "统计", "各", "占比", "排行", "分别"]
       none: ["总数", "原值", "成本", "单价"]
     examples:
       - "IT资产状态分布"
@@ -68,163 +76,19 @@ intents:
         - "各类状态各有多少IT资产"
     ontology_refs: [Asset]
     physical_tables: [tb_itzcbd]
+    optional_slots: [zczt, pp, cfdd, cwsszt, zcly, gys, dept_id, user_id]
     output_type: grouped_count
-    template: asset_by_status
-
-
-  # ==================== IT资产按品牌分布 ====================
-  - id: asset_by_brand
-    display_name: IT资产按品牌分布
-    status: executable
-    priority: 90
-    match:
-      all: ["品牌"]
-      any: ["分布", "统计", "各", "占比", "多少", "排行", "分别", "数量"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按品牌分布"
-      - "各品牌IT资产数量"
-      - "品牌IT资产排行"
-    semantic:
-      queries:
-        - "按品牌分组统计IT资产"
-        - "哪些品牌IT资产最多"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_brand
-
-
-  # ==================== IT资产按存放地点分布 ====================
-  - id: asset_by_location
-    display_name: IT资产按存放地点分布
-    status: executable
-    priority: 90
-    match:
-      all: ["存放", "地点"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按存放地点分布"
-      - "各存放地点IT资产数量"
-    semantic:
-      queries:
-        - "按存放地点分组统计IT资产"
-        - "各地点的IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_location
-
-
-  # ==================== IT资产按中类分布 ====================
-  - id: asset_by_category
-    display_name: IT资产按中类分布
-    status: executable
-    priority: 90
-    match:
-      all: ["中类"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按中类分布"
-      - "各IT资产中类数量"
-    semantic:
-      queries:
-        - "按IT资产中类分组统计"
-        - "中类IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_category
-
-
-  # ==================== IT资产按小类分布 ====================
-  - id: asset_by_subcategory
-    display_name: IT资产按小类分布
-    status: executable
-    priority: 90
-    match:
-      all: ["小类"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按小类分布"
-      - "各IT资产小类数量"
-    semantic:
-      queries:
-        - "按IT资产小类分组统计"
-        - "小类IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_subcategory
-
-
-  # ==================== IT资产按财务所属主体分布 ====================
-  - id: asset_by_financial_entity
-    display_name: IT资产按财务所属主体分布
-    status: executable
-    priority: 90
-    match:
-      all: ["财务", "主体"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按财务所属主体分布"
-      - "各财务主体IT资产数量"
-    semantic:
-      queries:
-        - "按财务所属主体分组统计IT资产"
-        - "各主体IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_financial_entity
-
-
-  # ==================== IT资产按来源分布 ====================
-  - id: asset_by_source
-    display_name: IT资产按来源分布
-    status: executable
-    priority: 90
-    match:
-      all: ["来源"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按来源分布"
-      - "各来源IT资产数量"
-    semantic:
-      queries:
-        - "按IT资产来源分组统计"
-        - "不同来源IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_source
-
-
-  # ==================== IT资产按供应商分布 ====================
-  - id: asset_by_supplier
-    display_name: IT资产按供应商分布
-    status: executable
-    priority: 90
-    match:
-      all: ["供应商"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别"]
-      none: ["原值", "成本", "单价"]
-    examples:
-      - "IT资产按供应商分布"
-      - "各供应商IT资产数量"
-    semantic:
-      queries:
-        - "按供应商分组统计IT资产"
-        - "各供应商供货IT资产分布"
-    ontology_refs: [Asset]
-    physical_tables: [tb_itzcbd]
-    output_type: grouped_count
-    template: asset_by_supplier
+    template: asset_groupby_count
+    remark:
+      - "zczt是资产状态"
+      - "pp是品牌"
+      - "cfdd是存放地点"
+      - "cwsszt是财务所属主体"
+      - "zcly是资产来源"
+      - "gys是供应商"
+      - "dept_id是部门"
+      - "user_id是使用人"
+    reason: "请选出问题${question}中涉及到的插槽"
 
 
   # ==================== IT资产按部门分布 ====================
@@ -235,7 +99,7 @@ intents:
     priority: 90
     match:
       all: ["IT资产", "部门"]
-      any: ["分布", "统计", "各", "占比", "多少", "数量", "分别", "排行"]
+      any: ["分布", "统计", "各", "占比", "分别", "排行"]
       none: ["原值", "成本", "单价"]
     examples:
       - "IT资产按部门分布"
@@ -253,7 +117,7 @@ intents:
 
   # ==================== IT资产明细列表（支持过滤） ====================
   - id: asset_list
-    display_name: IT资产明细列表（支持按状态/品牌/地点/财务主体过滤）
+    display_name: IT资产明细列表
     status: executable
     priority: 85
     match:
@@ -285,20 +149,25 @@ intents:
         - "查询某品牌IT资产明细"
     ontology_refs: [Asset]
     physical_tables: [tb_itzcbd]
-    optional_slots: [zczt, pp, cfdd, cwsszt]
+    optional_slots: [zczt, pp, cfdd, cwsszt, user_id]
     slot_defaults: {}
     output_type: list
     template: asset_list
-
+    remark:
+      - "zczt是资产状态"
+      - "pp是品牌"
+      - "cfdd是存放地点"
+      - "cwsszt是财务所属主体"
+      - "user_id是使用人"
 
   # ==================== IT资产原值合计（全局 / 过滤） ====================
   - id: asset_value_total
-    display_name: IT资产原值合计（支持按状态/品牌过滤）
+    display_name: IT资产原值合计
     status: executable
     priority: 88
     match:
       all: ["原值"]
-      any: ["合计", "总和", "总额", "总计", "多少", "有多少", "一共"]
+      any: ["合计", "总和", "总额", "总计", "一共"]
       none: ["状态", "品牌", "地点", "按", "各", "分布", "部门"]
     examples:
       - "IT资产原值合计"
@@ -364,7 +233,7 @@ sql_templates:
 
   # --- IT资产总数（多维可选过滤） ---
   asset_total_count:
-    plan: 统计未删除的 IT IT资产总数，可选按状态/品牌/存放地点/财务主体/来源/供应商/部门/所属人模糊过滤。
+    plan: 统计IT资产总数。
     params:
       zczt: zczt
       pp: pp
@@ -388,91 +257,30 @@ sql_templates:
       [[user_id:AND a.user_id LIKE concat('%', %(user_id)s, '%')]]
 
 
-  # --- IT资产按状态分布 ---
-  asset_by_status:
-    plan: 按IT资产状态分组统计IT资产数量。
+  # --- IT资产按分组条件分布 ---
+  asset_groupby_count:
+    plan: 按IT资产分组条件统计IT资产数量。
     sql: >
-      SELECT a.zczt AS IT资产状态, COUNT(*) AS total
+      SELECT 
+      [[zczt:a.zczt AS IT资产状态]]
+      [[pp:a.pp AS 品牌]]
+      [[cfdd:a.cfdd AS 存放地点]]
+      [[cwsszt:a.cwsszt AS 财务所属主体]]
+      [[zcly:a.zcly AS 资产来源]]
+      [[gys:a.gys AS 供应商]]
+      [[zczl:a.zczl AS 资产中类]]
+      [[zcxl:a.zcxl AS 资产小类]]
+      , COUNT(*) AS total
       FROM tb_itzcbd a
       WHERE a.del_flag = 0
-      GROUP BY a.zczt
-      ORDER BY total DESC
-
-
-  # --- IT资产按品牌分布 ---
-  asset_by_brand:
-    plan: 按品牌分组统计IT资产数量。
-    sql: >
-      SELECT a.pp AS 品牌, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.pp
-      ORDER BY total DESC
-
-
-  # --- IT资产按存放地点分布 ---
-  asset_by_location:
-    plan: 按存放地点分组统计IT资产数量。
-    sql: >
-      SELECT a.cfdd AS 存放地点, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.cfdd
-      ORDER BY total DESC
-
-
-  # --- IT资产按中类分布 ---
-  asset_by_category:
-    plan: 按IT资产中类分组统计IT资产数量。
-    sql: >
-      SELECT a.zczl AS IT资产中类, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.zczl
-      ORDER BY total DESC
-
-
-  # --- IT资产按小类分布 ---
-  asset_by_subcategory:
-    plan: 按IT资产小类分组统计IT资产数量。
-    sql: >
-      SELECT a.zcxl AS IT资产小类, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.zcxl
-      ORDER BY total DESC
-
-
-  # --- IT资产按财务所属主体分布 ---
-  asset_by_financial_entity:
-    plan: 按财务所属主体分组统计IT资产数量。
-    sql: >
-      SELECT a.cwsszt AS 财务所属主体, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.cwsszt
-      ORDER BY total DESC
-
-
-  # --- IT资产按来源分布 ---
-  asset_by_source:
-    plan: 按IT资产来源分组统计IT资产数量。
-    sql: >
-      SELECT a.zcly AS IT资产来源, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.zcly
-      ORDER BY total DESC
-
-
-  # --- IT资产按供应商分布 ---
-  asset_by_supplier:
-    plan: 按供应商分组统计IT资产数量。
-    sql: >
-      SELECT a.gys AS 供应商, COUNT(*) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.gys
+      [[zczt:GROUP BY a.zczt]]
+      [[pp:GROUP BY a.pp]]
+      [[cfdd:GROUP BY a.cfdd]]
+      [[cwsszt:GROUP BY a.cwsszt]]
+      [[zcly:GROUP BY a.zcly]]
+      [[gys:GROUP BY a.gys]]
+      [[zczl:GROUP BY a.zczl]]
+      [[zcxl:GROUP BY a.zcxl]]
       ORDER BY total DESC
 
 
@@ -489,12 +297,13 @@ sql_templates:
 
   # --- IT资产明细列表（多维可选过滤） ---
   asset_list:
-    plan: 查询 IT IT资产明细列表，可选按状态/品牌/存放地点/财务主体过滤，LIMIT 由策略层追加。
+    plan: 查询IT资产明细列表。
     params:
       zczt: zczt
       pp: pp
       cfdd: cfdd
       cwsszt: cwsszt
+      user_id: user_id
     sql: >
       SELECT
         a.bqh AS 标签号,
@@ -508,6 +317,7 @@ sql_templates:
         a.zcyz AS IT资产原值
       FROM tb_itzcbd a
       WHERE a.del_flag = 0
+      [[user_id: and a.user_id = %(user_id)s]]
       [[zczt:AND a.zczt LIKE concat('%', %(zczt)s, '%')]]
       [[pp:AND a.pp LIKE concat('%', %(pp)s, '%')]]
       [[cfdd:AND a.cfdd LIKE concat('%', %(cfdd)s, '%')]]
@@ -517,7 +327,7 @@ sql_templates:
 
   # --- IT资产原值合计（可选过滤） ---
   asset_value_total:
-    plan: 统计未删除IT资产的IT资产原值合计，可选按状态/品牌过滤。
+    plan: 统计IT资产原值合计。
     params:
       zczt: zczt
       pp: pp
@@ -539,13 +349,3 @@ sql_templates:
       GROUP BY a.zczt
       ORDER BY total DESC
 
-
-  # --- IT资产原值按部门分布 ---
-  asset_value_by_dept:
-    plan: 按所属部门编号分组统计IT资产原值合计。
-    sql: >
-      SELECT a.dept_id AS 所属部门, SUM(CAST(COALESCE(a.zcyz, '0') AS DECIMAL(18,2))) AS total
-      FROM tb_itzcbd a
-      WHERE a.del_flag = 0
-      GROUP BY a.dept_id
-      ORDER BY total DESC
