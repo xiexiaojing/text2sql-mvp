@@ -132,3 +132,17 @@ cases:
     domainId: demo-tenant-1
     expected:
       rejected: true
+
+  - id: reject-phone-missing-slot
+    question: 按手机号查询支付订单
+    domainId: demo-tenant-1
+    expected:
+      rejected: true
+      reason_contains: 缺少必要条件
+
+  - id: reject-sensitive-field
+    question: 查询支付订单付款手机号
+    domainId: demo-tenant-1
+    expected:
+      rejected: true
+      reason_contains: 敏感字段
