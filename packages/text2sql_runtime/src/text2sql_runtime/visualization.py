@@ -90,6 +90,12 @@ _PIE_SPECS = (
 
 
 def detect_requested_chart_type(question: str | None) -> ChartType | None:
+    """Return the chart type requested in the question, if any.
+
+    Rule: longest matching keyword wins. On a length tie, the chart type
+    appearing earlier in ``CHART_TYPE_KEYWORDS`` wins — so more specific
+    types (rose, donut, sankey, ...) beat generic ones (bar, pie).
+    """
     text = str(question or "").strip()
     if not text:
         return None
@@ -169,18 +175,6 @@ def append_echarts_fence(answer: str, option: dict[str, Any]) -> str:
     return f"{answer.rstrip()}\n\n```echarts\n{payload}\n```"
 
 
-def chart_series_type(option: dict[str, Any] | None) -> str | None:
-    if not option:
-        return None
-    series = option.get("series")
-    if not isinstance(series, list) or not series:
-        return None
-    first = series[0]
-    if not isinstance(first, dict):
-        return None
-    return str(first.get("type") or "")
-
-
 def _build_refund_trend_response(
     rows: list[dict[str, Any]],
     chart_type: ChartType,
@@ -232,111 +226,6 @@ def _build_merchant_rank_response(
         return None, None
     prefix = _chart_answer_prefix(question, effective_type)
     answer = f"{prefix}{title}如下。"
-    return answer, option
-
-
-def _build_visiting_trend_response(
-    rows: list[dict[str, Any]],
-    slots: dict[str, Any],
-    chart_type: ChartType,
-    question: str | None,
-) -> tuple[str | None, dict[str, Any] | None]:
-    spec = _LINE_SPECS[0]
-    categories, values = _extract_series(rows, spec["label_key"], spec["value_key"])
-    if not categories:
-        return None, None
-    person = str(slots.get("person_name") or "该走访人")
-    total = sum(values)
-    effective_type = chart_type if chart_type in {"line", "bar", "area", "horizontal_bar"} else "line"
-    title = f"{person}去年走访数走势"
-    option = _render_distribution_chart(
-        chart_type=effective_type,
-        categories=categories,
-        values=values,
-        title=title,
-        x_name=spec["x_name"],
-        y_name=spec["y_name"],
-        smooth_line=True,
-    )
-    if option is None:
-        return None, None
-    prefix = _chart_answer_prefix(question, effective_type)
-    answer = f"{prefix}{person}去年共走访 {total} 次，按月走势如下。"
-    return answer, option
-
-
-def _build_grid_party_response(
-    rows: list[dict[str, Any]],
-    slots: dict[str, Any],
-    chart_type: ChartType,
-    question: str | None,
-) -> tuple[str | None, dict[str, Any] | None]:
-    buildings: list[str] = []
-    values: list[int] = []
-    for row in rows:
-        label = row.get("building_name") or row.get("building_name_path")
-        if label is None:
-            continue
-        buildings.append(str(label))
-        values.append(int(row.get("total") or 0))
-    if not buildings:
-        return None, None
-
-    grid_label = str(rows[0].get("grid_name") or slots.get("grid_name") or "该网格")
-    total = sum(values)
-    effective_type = chart_type
-    if chart_type not in {"heatmap", "bar"}:
-        effective_type = "heatmap"
-
-    if effective_type == "heatmap":
-        option = _build_heatmap_option(buildings, values, f"{grid_label}党员楼栋分布")
-    else:
-        option = _render_distribution_chart(
-            chart_type="bar",
-            categories=buildings,
-            values=values,
-            title=f"{grid_label}党员楼栋分布",
-            x_name="楼栋",
-            y_name="党员数",
-            rotate_labels=True,
-        )
-    if option is None:
-        return None, None
-    prefix = _chart_answer_prefix(question, effective_type)
-    answer = f"{prefix}{grid_label}共有 {total} 名党员，按楼栋分布如下。"
-    return answer, option
-
-
-def _build_grid_distribution_response(
-    rows: list[dict[str, Any]],
-    slots: dict[str, Any],
-    intent: str,
-    chart_type: ChartType,
-    question: str | None,
-) -> tuple[str | None, dict[str, Any] | None]:
-    categories, values = _extract_series(rows, "grid_name", "total")
-    if not categories:
-        return None, None
-    total = sum(values)
-    tag_label = str(slots.get("tag_name") or "目标人群")
-    title = "各网格人口分布" if intent == "grid_population_rank" else f"各网格{tag_label}分布"
-    effective_type = chart_type if chart_type in {"bar", "pie", "donut", "rose", "horizontal_bar", "funnel", "radar"} else "bar"
-    option = _render_distribution_chart(
-        chart_type=effective_type,
-        categories=categories,
-        values=values,
-        title=title,
-        x_name="网格",
-        y_name="人数",
-        rotate_labels=effective_type == "bar",
-    )
-    if option is None:
-        return None, None
-    prefix = _chart_answer_prefix(question, effective_type)
-    if intent == "grid_population_rank":
-        answer = f"{prefix}各网格人口合计 {total} 人，分布如下。"
-    else:
-        answer = f"{prefix}各网格「{tag_label}」合计 {total} 人，分布如下。"
     return answer, option
 
 
@@ -397,29 +286,6 @@ def _chart_answer_prefix(question: str | None, chart_type: ChartType) -> str:
     if requested == chart_type:
         return f"已按您要求的{label}展示："
     return f"当前数据更适合{label}展示："
-
-
-def _render_category_chart(
-    *,
-    chart_type: ChartType,
-    categories: list[str],
-    values: list[int],
-    title: str,
-    x_name: str,
-    y_name: str,
-    smooth_line: bool = False,
-    rotate_labels: bool = False,
-) -> dict[str, Any] | None:
-    return _render_distribution_chart(
-        chart_type=chart_type,
-        categories=categories,
-        values=values,
-        title=title,
-        x_name=x_name,
-        y_name=y_name,
-        smooth_line=smooth_line,
-        rotate_labels=rotate_labels,
-    )
 
 
 def _render_distribution_chart(
@@ -653,9 +519,9 @@ def _extract_series(
     value_key: str,
     *,
     empty_label: str | None = None,
-) -> tuple[list[str], list[int]]:
+) -> tuple[list[str], list[int | float]]:
     categories: list[str] = []
-    values: list[int] = []
+    values: list[int | float] = []
     for row in rows:
         label = row.get(label_key)
         if label is None or str(label).strip() == "":
@@ -663,48 +529,26 @@ def _extract_series(
                 continue
             label = empty_label
         categories.append(str(resolve_grouped_label(label_key, label)))
-        values.append(int(row.get(value_key) or 0))
+        values.append(_coerce_number(row.get(value_key)))
     return categories, values
 
 
-def _build_heatmap_option(
-    buildings: list[str],
-    values: list[int],
-    title: str,
-) -> dict[str, Any] | None:
-    if not buildings:
-        return None
-    max_value = max(values) if values else 0
-    heatmap_data = [[index, 0, value] for index, value in enumerate(values)]
-    return {
-        "title": {"text": title, "left": "center"},
-        "tooltip": {"position": "top"},
-        "grid": {"height": "56%", "top": "14%", "left": "8%", "right": "8%", "containLabel": True},
-        "xAxis": {
-            "type": "category",
-            "data": buildings,
-            "splitArea": {"show": True},
-            "axisLabel": {"interval": 0, "rotate": 30},
-        },
-        "yAxis": {"type": "category", "data": ["党员数"], "splitArea": {"show": True}},
-        "visualMap": {
-            "min": 0,
-            "max": max_value or 1,
-            "calculable": True,
-            "orient": "horizontal",
-            "left": "center",
-            "bottom": "2%",
-        },
-        "series": [
-            {
-                "name": "党员数",
-                "type": "heatmap",
-                "data": heatmap_data,
-                "label": {"show": True},
-                "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0, 0, 0, 0.5)"}},
-            }
-        ],
-    }
+def _coerce_number(raw: Any) -> int | float:
+    """Preserve numeric precision for chart values.
+
+    SUM over money columns comes back as Decimal; forcing ``int()`` silently
+    drops the fractional part (0.5 per row = wrong totals). Convert via
+    ``float`` and only narrow back to ``int`` when the value is whole.
+    """
+    if raw is None:
+        return 0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    if value.is_integer():
+        return int(value)
+    return value
 
 
 def _match_pie_spec(rows: list[dict[str, Any]]) -> dict[str, str] | None:
@@ -719,18 +563,10 @@ def _match_pie_spec(rows: list[dict[str, Any]]) -> dict[str, str] | None:
 
 _VALUE_KEYS = frozenset({"total", "count"})
 _LABEL_KEY_PRIORITY = (
-    "age_group",
-    "sexual",
-    "sexual_value",
     "channel_value",
     "status_value",
     "merchant_name",
     "refund_date",
-    "political_status_value",
-    "party_branch_label",
-    "marital_status",
-    "grid_name",
-    "building_name",
 )
 
 
