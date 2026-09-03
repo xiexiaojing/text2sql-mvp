@@ -1,5 +1,7 @@
 # MCP Integration
 
+> 本文对应 commit：`3229ee1`（对账见 `docs/doc-audit-2026-09-03.md`）。
+
 The MCP server exposes the same guarded runtime as the HTTP API.
 
 ## Flow

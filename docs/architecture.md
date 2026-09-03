@@ -1,5 +1,7 @@
 # Architecture
 
+> 本文对应 commit：`3229ee1`（对账见 `docs/doc-audit-2026-09-03.md`）。
+
 `text2sql-mvp` validates a **guarded Text-to-SQL pipeline** suitable for production analytics assistants. The LLM never gets a generic SQL executor; every path is constrained by whitelist schema and business semantics.
 
 ## Request flow
@@ -22,13 +24,16 @@
 
 </details>
 
-路由分支与配置 `status` 对应关系：
+路由分支与配置 `status` 对应关系（可在 `business_semantics.yaml` 里声明）：
 
 | 分支 | 配置 status | 说明 |
 |------|-------------|------|
 | 可执行 | `executable` | 命中意图且有模板，走 SQL 模板编译 |
 | 受控兜底 | `guarded_text2sql` | 无模板，在 Schema 白名单内由 Schema/LLM 生成 |
+| 元数据查询 | `metadata` | 走字段解释等只读元数据路径（示例：`field_explanation`） |
 | 需映射 | `needs_mapping` | 口径未配置，拒答并返回原因 |
+
+上述四个是**配置层面**允许直接声明的 status。运行时路由还会派生出 `needs_clarification`（缺必要槽位）和 `unsupported`（候选置信度不足）两种状态，见 `business_semantics.py` 的 `_build_plan`。
 
 ```mermaid
 flowchart LR
@@ -70,9 +75,10 @@ flowchart LR
 | 召回 | Retrieve | 从大量意图里先捞出候选 |
 | 精排 | Rank | 在候选里选出最终意图 |
 | 模板 | Template | 预先审核的 SQL 骨架 |
-| 护栏 | Harness | 规则、校验、权限边界，约束输出 |
+| 护栏 | Guard | 规则、校验、权限边界，约束输出（见 `SqlGuard`） |
 | 可执行 | `executable` | 有模板，走主路径 |
 | 受控兜底 | `guarded_text2sql` | 无模板，在白名单内生成 |
+| 元数据 | `metadata` | 走字段解释等只读元数据路径 |
 | 需映射 | `needs_mapping` | 口径未配，拒答 |
 
 ## 什么算「规则引擎」
@@ -115,7 +121,8 @@ if/elif 链
 | 100 | `chart_type_follow_up` | 通用：饼图 → 折线图 |
 | 91 | `count_to_list_follow_up` | 通用：「有多少人」→「是谁」→「有哪些」 |
 | 10 | `dimension_slot_follow_up` | 通用：「那按状态呢」→ 替换上轮分组维度 |
-| 95–89 | person_count / grid / ledger … | 领域专用 |
+
+当前 `_RULES` 只有以上三条通用规则；早期社区版本里的领域专用规则（人员计数 / 网格 / 台账等）在 4d1213b 重构成规则引擎时被移除，如需扩展参考三条通用规则的写法。
 
 改写成功后，`interactionLogs` 中可见 `kind=conversation`、`rewriteReason=…`、`originalQuestion` / `effectiveQuestion`。
 
