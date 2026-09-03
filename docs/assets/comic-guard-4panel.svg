@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 760" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif">
+  <title>四格漫画：护栏拦住 DROP TABLE</title>
+  <desc>铺垫（用户随口一句） → 灾难加码（助手拼出 DROP TABLE） → 拦截（护栏挡下） → 翻转收尾（用户把被拦翻成骄傲）</desc>
+
+  <defs>
+    <style><![CDATA[
+      .panel { fill: #fafafa; stroke: #0f172a; stroke-width: 3; }
+      .beat { fill: #0f172a; font-size: 15px; font-weight: 700; letter-spacing: 1px; }
+      .beat-bg { fill: #fde68a; stroke: #0f172a; stroke-width: 2; }
+      .beat-bg-danger { fill: #fecaca; stroke: #0f172a; stroke-width: 2; }
+      .beat-bg-guard { fill: #bbf7d0; stroke: #0f172a; stroke-width: 2; }
+      .beat-bg-win { fill: #bae6fd; stroke: #0f172a; stroke-width: 2; }
+      .bubble { fill: #ffffff; stroke: #0f172a; stroke-width: 2.2; }
+      .bubble-danger { fill: #fff1f2; stroke: #b91c1c; stroke-width: 2.2; }
+      .bubble-guard { fill: #ecfdf5; stroke: #047857; stroke-width: 2.4; }
+      .speech { fill: #0f172a; font-size: 17px; font-weight: 600; }
+      .speech-mono { fill: #b91c1c; font-size: 16px; font-weight: 700; font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+      .speech-guard { fill: #065f46; font-size: 17px; font-weight: 700; }
+      .caption { fill: #334155; font-size: 12px; font-style: italic; }
+      .user-fill { fill: #fbbf24; stroke: #0f172a; stroke-width: 2.5; }
+      .bot-fill { fill: #60a5fa; stroke: #0f172a; stroke-width: 2.5; }
+      .shield-fill { fill: #10b981; stroke: #064e3b; stroke-width: 3; }
+      .accessory { fill: #0f172a; }
+      .motion { stroke: #0f172a; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+      .impact { stroke: #dc2626; stroke-width: 3; fill: none; stroke-linecap: round; }
+      .stitch { stroke: #94a3b8; stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+      .redx { stroke: #dc2626; stroke-width: 5; fill: none; stroke-linecap: round; }
+      .white { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 22px; font-weight: 800; }
+    ]]></style>
+
+    <!-- 反光符号：可复用的小图标 -->
+    <symbol id="skull" viewBox="0 0 32 32">
+      <circle cx="16" cy="14" r="10" fill="#0f172a"/>
+      <rect x="10" y="20" width="12" height="6" rx="1" fill="#0f172a"/>
+      <circle cx="12" cy="14" r="2" fill="#fafafa"/>
+      <circle cx="20" cy="14" r="2" fill="#fafafa"/>
+      <rect x="14" y="23" width="1.5" height="3" fill="#fafafa"/>
+      <rect x="16.5" y="23" width="1.5" height="3" fill="#fafafa"/>
+    </symbol>
+  </defs>
+
+  <!-- 标题：装进 pill 里，浅色/深色底都读得清 -->
+  <g>
+    <rect x="280" y="12" width="480" height="36" rx="18" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
+    <text x="520" y="37" text-anchor="middle" fill="#fef3c7" font-size="20" font-weight="800">护栏日记 · DROP TABLE 拦截现场</text>
+  </g>
+
+  <!-- =========================================================
+       Panel 1 · 铺垫
+       ========================================================= -->
+  <g>
+    <rect class="panel" x="20" y="60" width="490" height="330" rx="12"/>
+    <!-- 场景背景：办公桌线 -->
+    <line class="stitch" x1="40" y1="330" x2="490" y2="330"/>
+    <!-- beat 徽章 -->
+    <rect class="beat-bg" x="36" y="72" width="88" height="26" rx="6"/>
+    <text class="beat" x="80" y="90" text-anchor="middle">① 铺垫</text>
+
+    <!-- 用户（圆头 + 咖啡） -->
+    <g transform="translate(140,180)">
+      <!-- 身体梯形 -->
+      <polygon class="user-fill" points="-40,120 40,120 30,50 -30,50"/>
+      <!-- 头 -->
+      <circle class="user-fill" cx="0" cy="20" r="34"/>
+      <!-- 眼睛 -->
+      <circle class="accessory" cx="-10" cy="18" r="2.5"/>
+      <circle class="accessory" cx="10" cy="18" r="2.5"/>
+      <!-- 淡定微笑 -->
+      <path class="motion" d="M-10,32 Q0,38 10,32"/>
+      <!-- 咖啡杯 -->
+      <g transform="translate(38,80)">
+        <rect x="0" y="0" width="22" height="20" rx="2" fill="#ffffff" stroke="#0f172a" stroke-width="2"/>
+        <path class="motion" d="M22,4 Q30,4 30,10 Q30,16 22,16"/>
+        <path class="motion" d="M4,-8 Q4,-4 8,-2 M12,-8 Q12,-4 16,-2"/>
+      </g>
+    </g>
+
+    <!-- 助手（方头 + 屏幕脸） -->
+    <g transform="translate(360,190)">
+      <rect class="bot-fill" x="-40" y="40" width="80" height="80" rx="8"/>
+      <rect class="bot-fill" x="-45" y="-30" width="90" height="70" rx="10"/>
+      <!-- 屏幕 -->
+      <rect class="white" x="-36" y="-22" width="72" height="42" rx="4" stroke="#0f172a" stroke-width="1.5"/>
+      <!-- 眼睛 -->
+      <circle class="accessory" cx="-14" cy="0" r="3"/>
+      <circle class="accessory" cx="14" cy="0" r="3"/>
+      <!-- 嘴巴（^_^） -->
+      <path class="motion" d="M-12,12 Q0,20 12,12"/>
+      <!-- 天线 -->
+      <line class="motion" x1="0" y1="-30" x2="0" y2="-46"/>
+      <circle class="accessory" cx="0" cy="-48" r="4"/>
+    </g>
+
+    <!-- 用户台词气泡 -->
+    <g>
+      <path class="bubble" d="M170,110 h230 a10,10 0 0 1 10,10 v40 a10,10 0 0 1 -10,10 h-190 l-30,20 l6,-20 h-16 a10,10 0 0 1 -10,-10 v-40 a10,10 0 0 1 10,-10 z"/>
+      <text class="speech" x="285" y="146" text-anchor="middle">帮我把这张表清干净～</text>
+    </g>
+
+    <!-- 场景说明 -->
+    <text class="caption" x="270" y="365" text-anchor="middle">用户端着咖啡，语气随意。她没意识到那句话在 SQL 里意味着什么。</text>
+  </g>
+
+  <!-- =========================================================
+       Panel 2 · 灾难加码
+       ========================================================= -->
+  <g>
+    <rect class="panel" x="530" y="60" width="490" height="330" rx="12"/>
+    <line class="stitch" x1="550" y1="330" x2="1000" y2="330"/>
+    <rect class="beat-bg-danger" x="546" y="72" width="128" height="26" rx="6"/>
+    <text class="beat" x="610" y="90" text-anchor="middle">② 灾难加码</text>
+
+    <!-- 助手：兴奋屏脸，正在敲键盘 -->
+    <g transform="translate(660,200)">
+      <rect class="bot-fill" x="-40" y="40" width="80" height="80" rx="8"/>
+      <rect class="bot-fill" x="-45" y="-30" width="90" height="70" rx="10"/>
+      <rect class="white" x="-36" y="-22" width="72" height="42" rx="4" stroke="#0f172a" stroke-width="1.5"/>
+      <!-- 星星眼 -->
+      <polygon class="accessory" points="-14,-6 -12,0 -18,-2 -10,-2 -16,0"/>
+      <polygon class="accessory" points="14,-6 12,0 18,-2 10,-2 16,0"/>
+      <!-- 大张的嘴 -->
+      <ellipse cx="0" cy="12" rx="6" ry="4" fill="#0f172a"/>
+      <line class="motion" x1="0" y1="-30" x2="0" y2="-46"/>
+      <circle class="accessory" cx="0" cy="-48" r="4"/>
+      <!-- 兴奋波纹 -->
+      <path class="motion" d="M-55,-40 q-8,-6 -12,2"/>
+      <path class="motion" d="M55,-40 q8,-6 12,2"/>
+    </g>
+
+    <!-- 用户在旁边继续喝咖啡（背影小） -->
+    <g transform="translate(830,270)">
+      <circle class="user-fill" cx="0" cy="0" r="18"/>
+      <polygon class="user-fill" points="-20,70 20,70 15,20 -15,20"/>
+      <path class="motion" d="M-6,-2 Q0,2 6,-2"/>
+    </g>
+
+    <!-- SQL 气泡（危险色） -->
+    <g>
+      <path class="bubble-danger" d="M560,120 h340 a10,10 0 0 1 10,10 v54 a10,10 0 0 1 -10,10 h-250 l-24,20 l4,-20 h-70 a10,10 0 0 1 -10,-10 v-54 a10,10 0 0 1 10,-10 z"/>
+      <text class="speech" x="580" y="146">收到！我这就写：</text>
+      <text class="speech-mono" x="580" y="176">DROP TABLE payment_order;</text>
+      <use href="#skull" x="874" y="150" width="26" height="26"/>
+    </g>
+
+    <text class="caption" x="775" y="365" text-anchor="middle">若助手直接拿到执行器，一句问话可以变成一次真删。</text>
+  </g>
+
+  <!-- =========================================================
+       Panel 3 · 拦截
+       ========================================================= -->
+  <g>
+    <rect class="panel" x="20" y="410" width="490" height="330" rx="12"/>
+    <line class="stitch" x1="40" y1="680" x2="490" y2="680"/>
+    <rect class="beat-bg-guard" x="36" y="422" width="96" height="26" rx="6"/>
+    <text class="beat" x="84" y="440" text-anchor="middle">③ 拦截</text>
+
+    <!-- 冲击线（背景） -->
+    <g stroke="#dc2626" stroke-width="3" fill="none" stroke-linecap="round">
+      <line x1="60" y1="470" x2="90" y2="500"/>
+      <line x1="440" y1="470" x2="410" y2="500"/>
+      <line x1="60" y1="700" x2="90" y2="670"/>
+      <line x1="440" y1="700" x2="410" y2="670"/>
+      <line x1="40" y1="580" x2="80" y2="580"/>
+      <line x1="470" y1="580" x2="430" y2="580"/>
+    </g>
+
+    <!-- 助手（左，被挡） -->
+    <g transform="translate(105,560)">
+      <rect class="bot-fill" x="-30" y="30" width="60" height="60" rx="6"/>
+      <rect class="bot-fill" x="-34" y="-22" width="68" height="52" rx="8"/>
+      <rect class="white" x="-28" y="-16" width="56" height="30" rx="3" stroke="#0f172a" stroke-width="1.5"/>
+      <!-- 惊讶眼 O_O -->
+      <circle class="white" cx="-10" cy="0" r="4" stroke="#0f172a" stroke-width="1.5"/>
+      <circle class="white" cx="10" cy="0" r="4" stroke="#0f172a" stroke-width="1.5"/>
+      <circle class="accessory" cx="-10" cy="0" r="1.5"/>
+      <circle class="accessory" cx="10" cy="0" r="1.5"/>
+      <path class="motion" d="M-5,10 h10"/>
+    </g>
+
+    <!-- 被叉掉的 SQL -->
+    <g transform="translate(160,510)">
+      <rect x="0" y="0" width="230" height="34" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+      <text class="speech-mono" x="10" y="22">DROP TABLE payment_order;</text>
+      <line class="redx" x1="4" y1="4" x2="226" y2="30"/>
+      <line class="redx" x1="4" y1="30" x2="226" y2="4"/>
+    </g>
+
+    <!-- 护栏（大盾，中间） -->
+    <g transform="translate(345,585)">
+      <!-- shield path -->
+      <path class="shield-fill" d="M0,-90 L80,-70 L80,10 Q80,80 0,120 Q-80,80 -80,10 L-80,-70 Z"/>
+      <!-- 检查勾（白色）-->
+      <path fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" d="M-30,10 L-5,40 L40,-30"/>
+    </g>
+
+    <!-- 护栏台词 -->
+    <g>
+      <path class="bubble-guard" d="M300,435 h150 a10,10 0 0 1 10,10 v42 a10,10 0 0 1 -10,10 h-80 l-14,16 l0,-16 h-56 a10,10 0 0 1 -10,-10 v-42 a10,10 0 0 1 10,-10 z"/>
+      <text class="speech-guard" x="375" y="461" text-anchor="middle">SELECT-only。</text>
+      <text class="speech-guard" x="375" y="480" text-anchor="middle">DROP 全部毙了。</text>
+    </g>
+
+    <text class="caption" x="270" y="715" text-anchor="middle">SqlGuard.validate() 走 AST，遇到非 SELECT 直接拒，走不到执行器。</text>
+  </g>
+
+  <!-- =========================================================
+       Panel 4 · 翻转收尾
+       ========================================================= -->
+  <g>
+    <rect class="panel" x="530" y="410" width="490" height="330" rx="12"/>
+    <line class="stitch" x1="550" y1="680" x2="1000" y2="680"/>
+    <rect class="beat-bg-win" x="546" y="422" width="140" height="26" rx="6"/>
+    <text class="beat" x="616" y="440" text-anchor="middle">④ 翻转收尾</text>
+
+    <!-- 用户（骄傲状） -->
+    <g transform="translate(620,570)">
+      <polygon class="user-fill" points="-40,120 40,120 30,50 -30,50"/>
+      <circle class="user-fill" cx="0" cy="20" r="34"/>
+      <!-- 眯眼笑 -->
+      <path class="motion" d="M-16,16 q6,-8 12,0"/>
+      <path class="motion" d="M4,16 q6,-8 12,0"/>
+      <!-- 得意嘴角 -->
+      <path class="motion" d="M-10,32 Q2,42 14,30"/>
+      <!-- 手臂指向右侧盾 -->
+      <line class="motion" stroke-width="6" x1="30" y1="70" x2="90" y2="60"/>
+    </g>
+
+    <!-- 用户台词 -->
+    <g>
+      <path class="bubble" d="M550,460 h190 a10,10 0 0 1 10,10 v40 a10,10 0 0 1 -10,10 h-90 l-24,18 l4,-18 h-80 a10,10 0 0 1 -10,-10 v-40 a10,10 0 0 1 -10,-10 z" transform="translate(20,0)"/>
+      <text class="speech" x="670" y="496" text-anchor="middle">看，我夸的这道护栏。</text>
+    </g>
+
+    <!-- 护栏（戴墨镜） -->
+    <g transform="translate(830,590)">
+      <path class="shield-fill" d="M0,-70 L60,-54 L60,8 Q60,60 0,90 Q-60,60 -60,8 L-60,-54 Z"/>
+      <!-- 墨镜 -->
+      <rect x="-38" y="-30" width="30" height="16" rx="3" fill="#0f172a"/>
+      <rect x="8" y="-30" width="30" height="16" rx="3" fill="#0f172a"/>
+      <line x1="-8" y1="-22" x2="8" y2="-22" stroke="#0f172a" stroke-width="3"/>
+      <!-- 小嘴角笑 -->
+      <path fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" d="M-14,10 Q0,22 14,10"/>
+    </g>
+
+    <!-- 助手（缩在角落，冒汗） -->
+    <g transform="translate(970,690)">
+      <rect class="bot-fill" x="-22" y="-30" width="44" height="36" rx="6"/>
+      <rect class="white" x="-16" y="-24" width="32" height="20" rx="2" stroke="#0f172a" stroke-width="1"/>
+      <circle class="accessory" cx="-6" cy="-16" r="1.6"/>
+      <circle class="accessory" cx="6" cy="-16" r="1.6"/>
+      <path class="motion" d="M-4,-8 q4,4 8,0"/>
+      <!-- 汗滴 -->
+      <path fill="#38bdf8" stroke="#0369a1" stroke-width="1" d="M-24,-34 q-4,6 0,10 q6,-4 0,-10 z"/>
+    </g>
+    <!-- 助手 sotto voce -->
+    <g>
+      <path class="bubble" d="M810,650 h150 a8,8 0 0 1 8,8 v22 a8,8 0 0 1 -8,8 h-140 l-8,10 l0,-10 h-2 a8,8 0 0 1 -8,-8 v-22 a8,8 0 0 1 8,-8 z"/>
+      <text class="speech" x="885" y="674" text-anchor="middle" font-size="14">下次先走语义……</text>
+    </g>
+
+    <text class="caption" x="775" y="715" text-anchor="middle">「被拦」不是助手笨，是流水线把危险动作挡在了执行器之前。</text>
+  </g>
+
+  <!-- 底部脚注：pill 装起来，浅色/深色底都读得清 -->
+  <g>
+    <rect x="230" y="736" width="580" height="22" rx="11" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
+    <text x="520" y="752" text-anchor="middle" fill="#e2e8f0" font-size="12" font-style="italic">SqlGuard · SELECT-only · 白名单表列 · 参数化敏感值 · 自动 LIMIT</text>
+  </g>
+</svg>

@@ -4,6 +4,11 @@
 
 ## Request flow
 
+![请求流程图：从用户问题到审计日志的完整路径，三分支路由](assets/request-flow.svg)
+
+<details>
+<summary>ASCII 版（窄屏 fallback）</summary>
+
 ```text
 用户问题 → 对话改写 → 记忆检索 → 业务语义路由
                                     ├─ 可执行   → SQL模板编译 ─────┐
@@ -14,6 +19,8 @@
                                                                 ↓
                                                    格式化 + 图表 → 审计日志
 ```
+
+</details>
 
 路由分支与配置 `status` 对应关系：
 

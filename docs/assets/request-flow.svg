@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 1280" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif">
+  <title>text2sql-mvp 请求流程</title>
+  <desc>用户问题 → 对话改写 → 记忆检索 → 业务语义路由 → 三分支（可执行 / 受控兜底 / 需映射→拒答） → 租户注入+LIMIT → SQL 护栏 AST → EXPLAIN+执行 → 格式化+图表 → 审计日志</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#d97706"/>
+    </marker>
+    <style><![CDATA[
+      .node { fill: #ffffff; stroke: #334155; stroke-width: 2; }
+      .label { fill: #0f172a; font-size: 20px; font-weight: 600; }
+      .code { fill: #475569; font-size: 13px; font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace; }
+      .edge { stroke: #475569; stroke-width: 2; fill: none; }
+      .edge-green { stroke: #059669; stroke-width: 2.5; fill: none; }
+      .edge-amber { stroke: #d97706; stroke-width: 2.5; fill: none; }
+      .edge-red { stroke: #dc2626; stroke-width: 2.5; fill: none; }
+      .branch-label { font-size: 14px; font-weight: 700; }
+      .branch-executable { fill: #059669; }
+      .branch-guarded { fill: #b45309; }
+      .branch-mapping { fill: #dc2626; }
+      .n-start { fill: #f1f5f9; stroke: #64748b; }
+      .n-router { fill: #fef3c7; stroke: #b45309; }
+      .n-guard { fill: #ecfeff; stroke: #0891b2; }
+      .n-audit { fill: #f5f3ff; stroke: #7c3aed; }
+      .n-exec { fill: #ecfdf5; stroke: #059669; }
+      .n-fallback { fill: #fffbeb; stroke: #d97706; }
+      .n-reject { fill: #fef2f2; stroke: #dc2626; }
+      .reject-label { fill: #991b1b; }
+    ]]></style>
+  </defs>
+
+  <!-- 背景透明，节点自带白/浅色填充，正常在浅色和深色底图上都可读 -->
+
+  <!-- 1. 用户问题 -->
+  <g>
+    <rect class="node n-start" x="270" y="30" width="220" height="70" rx="14"/>
+    <text class="label" x="380" y="62" text-anchor="middle">用户问题</text>
+    <text class="code" x="380" y="84" text-anchor="middle">Text2SqlService.query()</text>
+  </g>
+  <path class="edge" d="M380,100 L380,140" marker-end="url(#arrow)"/>
+
+  <!-- 2. 对话改写 -->
+  <g>
+    <rect class="node" x="240" y="140" width="280" height="70" rx="14"/>
+    <text class="label" x="380" y="172" text-anchor="middle">对话改写</text>
+    <text class="code" x="380" y="194" text-anchor="middle">contextualize_question()</text>
+  </g>
+  <path class="edge" d="M380,210 L380,250" marker-end="url(#arrow)"/>
+
+  <!-- 3. 记忆检索 -->
+  <g>
+    <rect class="node" x="240" y="250" width="280" height="70" rx="14"/>
+    <text class="label" x="380" y="282" text-anchor="middle">记忆检索</text>
+    <text class="code" x="380" y="304" text-anchor="middle">Text2SqlService._retrieve_memories()</text>
+  </g>
+  <path class="edge" d="M380,320 L380,360" marker-end="url(#arrow)"/>
+
+  <!-- 4. 业务语义路由（菱形+说明） -->
+  <g>
+    <polygon class="node n-router" points="380,360 570,430 380,500 190,430"/>
+    <text class="label" x="380" y="422" text-anchor="middle">业务语义路由</text>
+    <text class="code" x="380" y="444" text-anchor="middle">BusinessSemantics.plan()</text>
+    <text class="code" x="380" y="460" text-anchor="middle">→ SemanticPlan.status</text>
+  </g>
+
+  <!-- 三分支：可执行 / 受控兜底 / 需映射 -->
+
+  <!-- 左：executable -->
+  <path class="edge-green" d="M255,462 C170,510 140,540 140,590" marker-end="url(#arrow-green)"/>
+  <text class="branch-label branch-executable" x="150" y="510">可执行</text>
+  <text class="code" x="150" y="528" fill="#059669">status = executable</text>
+
+  <!-- 中：guarded_text2sql -->
+  <path class="edge-amber" d="M380,500 L380,590" marker-end="url(#arrow-amber)"/>
+  <text class="branch-label branch-guarded" x="390" y="540">受控兜底</text>
+  <text class="code" x="390" y="558" fill="#b45309">status = guarded_text2sql</text>
+
+  <!-- 右：needs_mapping -->
+  <path class="edge-red" d="M505,462 C620,510 620,540 620,590" marker-end="url(#arrow-red)"/>
+  <text class="branch-label branch-mapping" x="530" y="510">需映射</text>
+  <text class="code" x="530" y="528" fill="#dc2626">status = needs_mapping</text>
+
+  <!-- 5a. SQL 模板编译 -->
+  <g>
+    <rect class="node n-exec" x="20" y="590" width="240" height="80" rx="14"/>
+    <text class="label" x="140" y="622" text-anchor="middle">SQL 模板编译</text>
+    <text class="code" x="140" y="644" text-anchor="middle">BusinessSemantics.compile()</text>
+    <text class="code" x="140" y="660" text-anchor="middle">（预审核模板 + 槽位渲染）</text>
+  </g>
+
+  <!-- 5b. Schema/LLM 兜底 -->
+  <g>
+    <rect class="node n-fallback" x="270" y="590" width="220" height="80" rx="14"/>
+    <text class="label" x="380" y="622" text-anchor="middle">Schema/LLM 兜底</text>
+    <text class="code" x="380" y="644" text-anchor="middle">schema_generator.generate()</text>
+    <text class="code" x="380" y="660" text-anchor="middle">或 llm_generator.generate()</text>
+  </g>
+
+  <!-- 5c. 拒答（终点） -->
+  <g>
+    <rect class="node n-reject" x="500" y="590" width="240" height="80" rx="14"/>
+    <text class="label reject-label" x="620" y="622" text-anchor="middle">拒答</text>
+    <text class="code" x="620" y="644" text-anchor="middle">raise RejectedQuery</text>
+    <text class="code" x="620" y="660" text-anchor="middle">（返回未配置口径原因，终止）</text>
+  </g>
+
+  <!-- 汇聚：executable & guarded 合流到「租户注入」 -->
+  <path class="edge-green" d="M140,670 C140,720 260,720 380,730" marker-end="url(#arrow-green)"/>
+  <path class="edge-amber" d="M380,670 L380,730" marker-end="url(#arrow-amber)"/>
+
+  <!-- 6. 租户注入 + LIMIT -->
+  <g>
+    <rect class="node" x="220" y="730" width="320" height="70" rx="14"/>
+    <text class="label" x="380" y="762" text-anchor="middle">租户注入 + LIMIT</text>
+    <text class="code" x="380" y="784" text-anchor="middle">inject_domain_filter() · ensure_limit()</text>
+  </g>
+  <path class="edge" d="M380,800 L380,840" marker-end="url(#arrow)"/>
+
+  <!-- 7. SQL 护栏 AST -->
+  <g>
+    <rect class="node n-guard" x="220" y="840" width="320" height="80" rx="14"/>
+    <text class="label" x="380" y="872" text-anchor="middle">SQL 护栏 AST</text>
+    <text class="code" x="380" y="894" text-anchor="middle">SqlGuard.validate()</text>
+    <text class="code" x="380" y="910" text-anchor="middle">（白名单表列 · SELECT-only · JOIN 路径）</text>
+  </g>
+  <path class="edge" d="M380,920 L380,960" marker-end="url(#arrow)"/>
+
+  <!-- 8. EXPLAIN + 执行 -->
+  <g>
+    <rect class="node" x="220" y="960" width="320" height="80" rx="14"/>
+    <text class="label" x="380" y="992" text-anchor="middle">EXPLAIN + 执行</text>
+    <text class="code" x="380" y="1014" text-anchor="middle">executor.explain() · executor.execute()</text>
+    <text class="code" x="380" y="1030" text-anchor="middle">（扫描行数超阈值即拒执行）</text>
+  </g>
+  <path class="edge" d="M380,1040 L380,1080" marker-end="url(#arrow)"/>
+
+  <!-- 9. 格式化 + 图表 -->
+  <g>
+    <rect class="node" x="220" y="1080" width="320" height="80" rx="14"/>
+    <text class="label" x="380" y="1112" text-anchor="middle">格式化 + 图表</text>
+    <text class="code" x="380" y="1134" text-anchor="middle">formatter.format() · maybe_build_chart()</text>
+    <text class="code" x="380" y="1150" text-anchor="middle">（文本摘要 + 表格 + ECharts）</text>
+  </g>
+  <path class="edge" d="M380,1160 L380,1200" marker-end="url(#arrow)"/>
+
+  <!-- 10. 审计日志 -->
+  <g>
+    <rect class="node n-audit" x="240" y="1200" width="280" height="60" rx="14"/>
+    <text class="label" x="380" y="1230" text-anchor="middle">审计日志</text>
+    <text class="code" x="380" y="1250" text-anchor="middle">Text2SqlService._audit()</text>
+  </g>
+
+  <!-- 图例 -->
+  <g transform="translate(560,1010)">
+    <rect x="0" y="0" width="180" height="150" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" rx="10"/>
+    <text x="14" y="24" font-size="14" font-weight="700" fill="#0f172a">路由分支图例</text>
+    <line x1="14" y1="46" x2="46" y2="46" stroke="#059669" stroke-width="3"/>
+    <text x="54" y="50" font-size="13" fill="#0f172a">可执行（executable）</text>
+    <line x1="14" y1="76" x2="46" y2="76" stroke="#d97706" stroke-width="3"/>
+    <text x="54" y="80" font-size="13" fill="#0f172a">受控兜底（guarded）</text>
+    <line x1="14" y1="106" x2="46" y2="106" stroke="#dc2626" stroke-width="3"/>
+    <text x="54" y="110" font-size="13" fill="#0f172a">需映射（拒答）</text>
+    <text x="14" y="136" font-size="11" fill="#475569">护栏 / 审计不可省</text>
+  </g>
+</svg>
