@@ -63,6 +63,49 @@ def test_contextualize_count_to_list_follow_up_generalized():
     assert log["rewriteReason"] == "count_to_list_follow_up"
 
 
+def test_contextualize_count_to_list_follow_up_without_prior_count_context():
+    rewritten, log = contextualize_question(
+        "有哪些",
+        [
+            {"role": "user", "content": "支付订单按渠道统计"},
+            {"role": "assistant", "content": "已按支付渠道展示：支付渠道分布如下。"},
+            {"role": "user", "content": "有哪些"},
+        ],
+    )
+
+    assert rewritten == "有哪些"
+    assert log is None
+
+
+def test_contextualize_count_to_list_follow_up_ignores_non_list_detail_question():
+    rewritten, log = contextualize_question(
+        "再查一下",
+        [
+            {"role": "user", "content": "商户有多少"},
+            {"role": "assistant", "content": "商户共 128 家。"},
+            {"role": "user", "content": "再查一下"},
+        ],
+    )
+
+    assert rewritten == "再查一下"
+    assert log is None
+
+
+def test_contextualize_count_to_list_follow_up_with_name_list_marker():
+    rewritten, log = contextualize_question(
+        "分别是谁",
+        [
+            {"role": "user", "content": "签约商户有多少"},
+            {"role": "assistant", "content": "商户共 42 家。"},
+            {"role": "user", "content": "分别是谁"},
+        ],
+    )
+
+    assert rewritten == "签约商户有哪些"
+    assert log is not None
+    assert log["rewriteReason"] == "count_to_list_follow_up"
+
+
 def test_query_uses_history_for_follow_up_grouping(service):
     result = service.query(
         QueryInput(
