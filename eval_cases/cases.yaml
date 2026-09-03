@@ -114,6 +114,19 @@ cases:
       compare_columns: [merchant_name, total]
       ignore_row_order: false
 
+  - id: payment-amount-average
+    question: 支付订单平均金额
+    domainId: demo-tenant-1
+    golden_sql: |
+      SELECT AVG(po.amount) AS total
+      FROM payment_order po
+      WHERE po.tenant_id = %(domain_id)s
+    expected:
+      tables: [payment_order]
+      features: [domain_filter]
+      compare_results: true
+      compare_columns: [total]
+
   - id: reject-unconfigured
     question: 请统计火星基地飞船泊位能耗
     domainId: demo-tenant-1

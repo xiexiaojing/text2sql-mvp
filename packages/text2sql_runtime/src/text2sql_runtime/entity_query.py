@@ -8,6 +8,9 @@ from .models import GeneratedSql, RejectedQuery
 from .semantics import epoch_ms_for_age_at_least, is_set_epoch_ms_sql
 
 
+ALLOWED_METRIC_AGGREGATIONS: frozenset[str] = frozenset({"sum", "avg", "max", "min"})
+
+
 @dataclass(frozen=True)
 class EntityAttribute:
     name: str
@@ -20,12 +23,21 @@ class EntityAttribute:
 
 
 @dataclass(frozen=True)
+class EntityMetricField:
+    name: str
+    column: str
+    label: str | None = None
+    aggregations: frozenset[str] = ALLOWED_METRIC_AGGREGATIONS
+
+
+@dataclass(frozen=True)
 class EntitySchema:
     entity_id: str
     table: str
     alias: str
     display_name: str
     attributes: dict[str, EntityAttribute]
+    metric_fields: dict[str, EntityMetricField] = field(default_factory=dict)
 
 
 class EntityQueryCompiler:
@@ -54,12 +66,37 @@ class EntityQueryCompiler:
                     expression=_optional_str(attr_item.get("expression")),
                     group_alias=_optional_str(attr_item.get("group_alias")),
                 )
+            metric_fields: dict[str, EntityMetricField] = {}
+            for metric_name, metric_item in dict(item.get("metric_fields") or {}).items():
+                if not isinstance(metric_item, Mapping):
+                    continue
+                column = _optional_str(metric_item.get("column"))
+                if not column:
+                    continue
+                raw_aggs = metric_item.get("aggregations")
+                if raw_aggs is None:
+                    allowed_aggs = ALLOWED_METRIC_AGGREGATIONS
+                else:
+                    allowed_aggs = frozenset(
+                        str(value).lower()
+                        for value in _as_list(raw_aggs)
+                        if str(value).lower() in ALLOWED_METRIC_AGGREGATIONS
+                    )
+                    if not allowed_aggs:
+                        continue
+                metric_fields[str(metric_name)] = EntityMetricField(
+                    name=str(metric_name),
+                    column=column,
+                    label=_optional_str(metric_item.get("label")),
+                    aggregations=allowed_aggs,
+                )
             schemas[str(entity_id)] = EntitySchema(
                 entity_id=str(entity_id),
                 table=str(item["table"]),
                 alias=str(item.get("alias", entity_id[:1] or "t")),
                 display_name=str(item.get("display_name", entity_id)),
                 attributes=attributes,
+                metric_fields=metric_fields,
             )
         return cls(schemas)
 
@@ -91,9 +128,8 @@ class EntityQueryCompiler:
         ]
         group_by = [item for item in group_by if item is not None]
         order_by = self._normalize_order_by(spec.get("order_by"), has_group=bool(group_by))
-        metric = str(spec.get("metric") or "count")
-        if metric != "count":
-            raise RejectedQuery(f"实体属性查询暂不支持指标: {metric}", "entity_metric_not_allowed")
+        metric = _normalize_metric(spec.get("metric"))
+        metric_sql = self._metric_select_sql(schema, metric)
 
         params: dict[str, Any] = {}
         select_parts: list[str] = []
@@ -104,7 +140,7 @@ class EntityQueryCompiler:
             alias = attr.group_alias or attr.name
             select_parts.append(f"{expr} AS {alias}")
             group_parts.append(alias)
-        select_parts.append("COUNT(*) AS total")
+        select_parts.append(metric_sql)
 
         where_parts: list[str] = []
         for item in filters:
@@ -191,7 +227,7 @@ class EntityQueryCompiler:
             entity_id,
             {
                 "entity": entity_id,
-                "metric": "count",
+                "metric": _infer_metric(question, schema),
                 "filters": filters,
                 "group_by": group_by,
                 "order_by": order_by,
@@ -205,7 +241,7 @@ class EntityQueryCompiler:
             raise RejectedQuery(f"未配置实体属性查询: {entity_id}", "entity_query_not_configured")
         return {
             "entity": entity_id,
-            "metric": str(raw.get("metric") or "count"),
+            "metric": _normalize_metric(raw.get("metric")),
             "filters": [
                 item
                 for item in (
@@ -297,6 +333,28 @@ class EntityQueryCompiler:
             raise RejectedQuery(f"字段不在实体属性白名单中: {schema.entity_id}.{field}", "entity_field_not_allowed")
         return attr
 
+    def _metric_select_sql(self, schema: EntitySchema, metric: Mapping[str, Any]) -> str:
+        agg = str(metric.get("agg") or "count").lower()
+        if agg == "count":
+            return "COUNT(*) AS total"
+        if agg not in ALLOWED_METRIC_AGGREGATIONS:
+            raise RejectedQuery(f"实体属性查询不支持指标: {agg}", "entity_metric_not_allowed")
+        field_name = str(metric.get("field") or "")
+        if not field_name:
+            raise RejectedQuery(f"聚合指标缺少字段: {agg}", "entity_metric_field_missing")
+        metric_field = schema.metric_fields.get(field_name)
+        if metric_field is None:
+            raise RejectedQuery(
+                f"聚合字段不在白名单中: {schema.entity_id}.{field_name}",
+                "entity_metric_field_not_allowed",
+            )
+        if agg not in metric_field.aggregations:
+            raise RejectedQuery(
+                f"字段 {field_name} 不支持聚合: {agg}",
+                "entity_metric_not_allowed",
+            )
+        return f"{agg.upper()}({schema.alias}.{metric_field.column}) AS total"
+
     def _group_expression(self, schema: EntitySchema, attr: EntityAttribute) -> str:
         if attr.kind == "age_group":
             if not attr.column:
@@ -345,6 +403,48 @@ class EntityQueryCompiler:
         param_name = f"{attr.name}_{len(params)}"
         params[param_name] = value
         return f"{schema.alias}.{attr.column} = %({param_name})s"
+
+
+_METRIC_KEYWORD_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("avg", ("平均", "均值", "均价")),
+    ("sum", ("合计", "总额", "总金额", "总计", "求和")),
+    ("max", ("最大", "最高")),
+    ("min", ("最小", "最低")),
+)
+
+
+def _normalize_metric(raw: Any) -> dict[str, Any]:
+    if raw in (None, "", [], {}):
+        return {"agg": "count"}
+    if isinstance(raw, str):
+        return {"agg": raw.strip().lower() or "count"}
+    if isinstance(raw, Mapping):
+        agg = str(raw.get("agg") or raw.get("aggregation") or "count").strip().lower()
+        field_name = raw.get("field") or raw.get("column") or raw.get("attribute")
+        result: dict[str, Any] = {"agg": agg or "count"}
+        if field_name not in (None, ""):
+            result["field"] = str(field_name)
+        return result
+    return {"agg": str(raw).strip().lower() or "count"}
+
+
+def _infer_metric(question: str, schema: EntitySchema) -> dict[str, Any]:
+    if not schema.metric_fields:
+        return {"agg": "count"}
+    matched_field: EntityMetricField | None = None
+    for metric_field in schema.metric_fields.values():
+        label = metric_field.label or metric_field.name
+        if label and label in question:
+            matched_field = metric_field
+            break
+    if matched_field is None:
+        return {"agg": "count"}
+    for agg, keywords in _METRIC_KEYWORD_MAP:
+        if agg not in matched_field.aggregations:
+            continue
+        if any(keyword in question for keyword in keywords):
+            return {"agg": agg, "field": matched_field.name}
+    return {"agg": "count"}
 
 
 def _age_group_case(column: str) -> str:

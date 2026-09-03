@@ -22,4 +22,4 @@ def test_seed_eval_cases_define_golden_sql(project_root):
         golden_sql = case.get("golden_sql") or case.get("expected", {}).get("golden_sql")
         assert golden_sql, f"missing golden_sql for {case.get('id')}"
         golden_count += 1
-    assert golden_count == 7
+    assert golden_count == 8

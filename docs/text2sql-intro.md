@@ -167,6 +167,39 @@ refund_daily_trend:
 
 ---
 
+### 4.2b 同一实体的多种聚合口径（sum / avg / max / min）
+
+**例子：**「支付订单平均金额是多少」「支付订单最大单笔金额」
+
+不必为每种聚合各写一条 SQL 模板。在 `business_semantics.yaml` 的 `entity_query_schemas`
+下声明实体和它的 `metric_fields`（可被聚合的字段），再定义 `template: dynamic_entity_query`
+的 intent，用 `slot_defaults.entity_query.metric` 指定 `{agg, field}`：
+
+```yaml
+entity_query_schemas:
+  payment_order:
+    table: payment_order
+    alias: po
+    metric_fields:
+      amount:
+        column: amount
+        label: 金额
+        aggregations: [sum, avg, max, min]
+
+intents:
+  - id: payment_amount_average
+    template: dynamic_entity_query
+    slot_defaults:
+      entity: payment_order
+      entity_query:
+        entity: payment_order
+        metric: {agg: avg, field: amount}
+```
+
+聚合字段必须出现在 `metric_fields` 里，`agg` 必须在 `{sum, avg, max, min, count}` 中——
+否则会在拼 SQL 前就被拒答（`entity_metric_field_not_allowed` /
+`entity_metric_not_allowed`），不会走到 SQL 护栏。
+
 ### 4.3 换图表类型（饼图 → 折线图）
 
 | 现象 | 改哪里 |

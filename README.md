@@ -48,8 +48,13 @@ Stop:
 | 各支付渠道交易金额分布 | `payment_channel_amount_distribution` |
 | 近7天每日退款笔数趋势 | `refund_daily_trend` |
 | 商户交易金额排名 | `merchant_payment_rank` |
+| 支付订单平均金额 | `payment_amount_average` (dynamic entity query, `AVG(amount)`) |
 
 Unmapped questions (e.g.「火星基地飞船泊位能耗」) are rejected with a clear reason instead of generating unsafe SQL.
+
+### Dynamic entity aggregations
+
+Beyond the fixed SQL templates, `template: dynamic_entity_query` intents route through a small compiler that accepts `sum` / `avg` / `max` / `min` (plus the default `count`) against columns declared as `metric_fields` on the entity. Anything else — an unknown aggregation, or a column outside the entity's `metric_fields` — is rejected upstream (`entity_metric_not_allowed` / `entity_metric_field_not_allowed`) so the SQL guard never sees it. Declare metric fields in `configs/business_semantics.yaml` under `entity_query_schemas.<entity>.metric_fields`; see the `payment_order.amount` entry in the demo config.
 
 ## Project layout
 
